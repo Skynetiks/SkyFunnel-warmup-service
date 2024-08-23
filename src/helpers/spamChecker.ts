@@ -36,98 +36,129 @@ export async function checkEmailInSpam({
 
   const imap = new Imap(imapConfig);
 
-  const openInbox = (folderName: string): Promise<void> =>
-    new Promise((resolve, reject) => {
-      imap.openBox(folderName, false, (err) => {
-        if (err) {
-          return reject(new Error(`Failed to open folder: ${folderName}`));
-        }
-       
-        resolve();
-      });
-    });
-
-  const searchEmails = (): Promise<number[]> =>
-    new Promise((resolve, reject) => {
-      imap.search(["UNSEEN"], (err, results) => {
-        if (err) {
-          return reject(new Error("Failed to search emails."));
-        }
-        console.log(results);
-        resolve(results || []);
-      });
-    });
-
-  const markEmailAsRead = (seqno: number): Promise<void> =>
-    new Promise((resolve, reject) => {
-      // TODO: this is not working
-      
-      imap.addFlags(seqno, "\\Seen", (err) => {
-        if (err) {
-          return reject(
-            new Error(`Failed to mark email as read: ${err.message}`)
-          );
-        }
-        resolve();
-      });
-    });
-
-  const fetchEmails = (results: number[]): Promise<boolean> =>
-    new Promise((resolve, reject) => {
-      if (results.length === 0) {
-        return resolve(false);
-      }
-
-      const f = imap.fetch(results, { bodies: "", markSeen: true });
-      let emailFound = false;
-
-      f.on("message", (msg, seqno) => {
-        msg.on("body", (stream: Source) => {
-          simpleParser(stream, async (err: Error | null, mail: ParsedMail) => {
-            if (err) {
-              return reject(new Error("Failed to parse email."));
-            }
-
-            const subject = mail.subject || "";
-            if (subject.includes(customId)) {
-              emailFound = true;
-              await markEmailAsRead(seqno);
-              resolve(true);
-            } else {
-              resolve(false);
-            }
-          });
+  const openInbox = async (folderName: string): Promise<void> => {
+    try {
+      return new Promise((resolve, reject) => {
+        imap.openBox(folderName, true, (err) => {
+          if (err) {
+            return reject(new Error(`Failed to open folder: ${folderName}`));
+          }
+          resolve();
         });
       });
+    } catch (error: any) {
+      console.error(`Error opening inbox: ${error.message}`);
+      throw error;
+    }
+  };
 
-      f.once("error", (err) => {
-        reject(new Error(`Failed to fetch messages: ${err.message}`));
+  const searchEmails = async (): Promise<number[]> => {
+    try {
+      return new Promise((resolve, reject) => {
+        imap.search(["UNSEEN"], (err, results) => {
+          if (err) {
+            return reject(new Error("Failed to search emails."));
+          }
+          console.log(results);
+          resolve(results || []);
+        });
       });
+    } catch (error: any) {
+      console.error(`Error searching emails: ${error.message}`);
+      throw error;
+    }
+  };
 
-      // TODO: Fix this Was Getting Issue this was called before the email was found
-      //   f.once("end", () => {
-      //     console.log("Ending", emailFound);
-      //     resolve(emailFound); // Resolve the promise with the final value of emailFound
-      //   });
-    });
-
-  const connectImap = (): Promise<void> =>
-    new Promise((resolve, reject) => {
-      imap.once("ready", resolve);
-      imap.once("error", (err: Error) =>
-        reject(new Error(`IMAP connection error: ${err.message}`))
-      );
-      imap.connect();
-    });
-
-  const endImapConnection = (): Promise<void> =>
-    new Promise((resolve) => {
-      imap.once("end", () => {
-        console.log("IMAP Connection ended");
-        resolve();
+  const markEmailAsRead = async (seqno: number): Promise<void> => {
+    try {
+      return new Promise((resolve, reject) => {
+        imap.addFlags(seqno, "\\Seen", (err) => {
+          if (err) {
+            return reject(new Error(`Failed to mark email as read: ${err.message}`));
+          }
+          resolve();
+        });
       });
-      imap.end();
-    });
+    } catch (error: any) {
+      console.error(`Error marking email as read: ${error.message}`);
+      throw error;
+    }
+  };
+
+  const fetchEmails = async (results: number[]): Promise<boolean> => {
+    try {
+      return new Promise((resolve, reject) => {
+        if (results.length === 0) {
+          return resolve(false);
+        }
+
+        const f = imap.fetch(results, { bodies: "", markSeen: true });
+        let emailFound = false;
+
+        f.on("message", (msg, seqno) => {
+          msg.on("body", (stream: Source) => {
+            simpleParser(stream, async (err: Error | null, mail: ParsedMail) => {
+              if (err) {
+                return reject(new Error("Failed to parse email."));
+              }
+
+              const subject = mail.subject || "";
+              if (subject.includes(customId)) {
+                emailFound = true;
+                await markEmailAsRead(seqno);
+                resolve(true);
+              } else {
+                resolve(false);
+              }
+            });
+          });
+        });
+
+        f.once("error", (err) => {
+          reject(new Error(`Failed to fetch messages: ${err.message}`));
+        });
+
+        // Ensure this is resolved properly
+        f.once("end", () => {
+          console.log("Ending", emailFound);
+          resolve(emailFound);
+        });
+      });
+    } catch (error: any) {
+      console.error(`Error fetching emails: ${error.message}`);
+      throw error;
+    }
+  };
+
+  const connectImap = async (): Promise<void> => {
+    try {
+      return new Promise((resolve, reject) => {
+        imap.once("ready", resolve);
+        imap.once("error", (err: Error) =>
+          reject(new Error(`IMAP connection error: ${err.message}`))
+        );
+        imap.connect();
+      });
+    } catch (error: any) {
+      console.error(`Error connecting to IMAP: ${error.message}`);
+      throw error;
+    }
+  };
+
+  const endImapConnection = async (): Promise<void> => {
+    try {
+      return new Promise((resolve) => {
+        imap.once("end", () => {
+          console.log("IMAP Connection ended");
+          resolve();
+        });
+        imap.end();
+      });
+    } catch (error: any) {
+      console.error(`Error ending IMAP connection: ${error.message}`);
+      throw error;
+    }
+  };
 
   try {
     await connectImap();
@@ -143,7 +174,7 @@ export async function checkEmailInSpam({
       email,
     };
   } catch (err) {
-    console.log("Error", err);
+    console.error("Error in checkEmailInSpam:", err);
     await endImapConnection();
     throw err;
   }

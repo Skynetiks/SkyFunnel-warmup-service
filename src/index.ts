@@ -28,7 +28,14 @@ const EmailSchema = z.object({
 
 async function processMessage(message: SQSMessage): Promise<void> {
   const startTime = performance.now();
-  const email = JSON.parse(message.Body);
+  let email = "";
+  try {
+    email = JSON.parse(message.Body);
+  } catch (jsonError) {
+    console.error(`JSON Parsing Error for message with Receipt Handle: ${message.ReceiptHandle}. Error: ${jsonError}`);
+    // Skip processing this message but don't crash the entire app
+    return;
+  }
 
   try {
     const {
@@ -116,4 +123,3 @@ console.log(
 
 // Start the recursive message handling process
 processMessagesAndScheduleNext();
-
