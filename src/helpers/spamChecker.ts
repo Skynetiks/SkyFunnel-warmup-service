@@ -1,7 +1,6 @@
 import Imap, { Config } from "imap";
 import { simpleParser, ParsedMail, Source } from "mailparser";
-import { CONFIGURATIONS } from "../data/mail-configuration";
-import { logEmailResponse } from "./database";
+import { getEmailCredentials, logEmailResponse } from "./database";
 
 interface CheckEmailInSpamOptions {
   email: string;
@@ -39,7 +38,7 @@ export async function checkEmailInSpam({
   const openInbox = async (folderName: string): Promise<void> => {
     try {
       return new Promise((resolve, reject) => {
-        imap.openBox(folderName, true, (err) => {
+        imap.openBox(folderName, false, (err) => {
           if (err) {
             return reject(new Error(`Failed to open folder: ${folderName}`));
           }
@@ -48,7 +47,6 @@ export async function checkEmailInSpam({
       });
     } catch (error: any) {
       console.error(`Error opening inbox: ${error.message}`);
-      throw error;
     }
   };
 
@@ -59,31 +57,15 @@ export async function checkEmailInSpam({
           if (err) {
             return reject(new Error("Failed to search emails."));
           }
-          console.log(results);
           resolve(results || []);
         });
       });
     } catch (error: any) {
       console.error(`Error searching emails: ${error.message}`);
-      throw error;
+      return [];
     }
   };
 
-  const markEmailAsRead = async (seqno: number): Promise<void> => {
-    try {
-      return new Promise((resolve, reject) => {
-        imap.addFlags(seqno, "\\Seen", (err) => {
-          if (err) {
-            return reject(new Error(`Failed to mark email as read: ${err.message}`));
-          }
-          resolve();
-        });
-      });
-    } catch (error: any) {
-      console.error(`Error marking email as read: ${error.message}`);
-      throw error;
-    }
-  };
 
   const fetchEmails = async (results: number[]): Promise<boolean> => {
     try {
@@ -105,7 +87,6 @@ export async function checkEmailInSpam({
               const subject = mail.subject || "";
               if (subject.includes(customId)) {
                 emailFound = true;
-                await markEmailAsRead(seqno);
                 resolve(true);
               } else {
                 resolve(false);
@@ -118,15 +99,11 @@ export async function checkEmailInSpam({
           reject(new Error(`Failed to fetch messages: ${err.message}`));
         });
 
-        // Ensure this is resolved properly
-        f.once("end", () => {
-          console.log("Ending", emailFound);
-          resolve(emailFound);
-        });
+   
       });
     } catch (error: any) {
       console.error(`Error fetching emails: ${error.message}`);
-      throw error;
+      return false;
     }
   };
 
@@ -149,7 +126,6 @@ export async function checkEmailInSpam({
     try {
       return new Promise((resolve) => {
         imap.once("end", () => {
-          console.log("IMAP Connection ended");
           resolve();
         });
         imap.end();
@@ -176,7 +152,6 @@ export async function checkEmailInSpam({
   } catch (err) {
     console.error("Error in checkEmailInSpam:", err);
     await endImapConnection();
-    throw err;
   }
 }
 
@@ -198,18 +173,17 @@ export async function CheckAndUpdateSpamInDb(
       return;
     }
 
+    const emailCredentials = await getEmailCredentials(replyEmail);
+
     // Finding the correct configuration for the reply email to use is to fetch spam folder
-    const emailCredentials = CONFIGURATIONS.find(
-      (config) => config.user === replyEmail
-    );
     if (!emailCredentials) {
       console.log("Email Credentials not found");
       return;
     }
 
-    const { user, pass } = emailCredentials;
 
-    // TODO: Functions is inside try still throwing errors and crashing the server
+    const { emailId: user, password: pass } = emailCredentials;
+
     const result = await checkEmailInSpam({
       email: user,
       password: pass,
@@ -218,8 +192,7 @@ export async function CheckAndUpdateSpamInDb(
 
     if (result) {
       if (result.isInSpam) {
-        // await logEmailResponse(warmupId, emailTo, "SPAM");
-        // TODO: Check Mark the email as read in gmail
+        await logEmailResponse(warmupId, emailTo, "SPAM");
         console.log("Email is in Spam");
       } else {
         console.log("Email is Not in Spam");

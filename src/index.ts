@@ -10,7 +10,6 @@ import {
   CheckAndUpdateSpamInDb,
   checkEmailInSpam,
 } from "./helpers/spamChecker";
-import { CONFIGURATIONS } from "./data/mail-configuration";
 import { REFRESH_TIME_IM_MILLISECONDS } from "./data/config";
 
 const EmailSchema = z.object({
@@ -21,13 +20,17 @@ const EmailSchema = z.object({
   warmupId: z.string(),
   referenceId: z.string().optional(),
   inReplyTo: z.string().optional(),
-  replyFrom: z.string().optional(),
+  replyFrom: z.string(),
   customMailId: z.string(),
   shouldReply: z.boolean().default(true),
 });
 
+process.on('uncaughtException', function (err) {
+  console.error(err);
+  console.log("Node NOT Exiting...");
+});
+
 async function processMessage(message: SQSMessage): Promise<void> {
-  const startTime = performance.now();
   let email = "";
   try {
     email = JSON.parse(message.Body);
@@ -57,25 +60,25 @@ async function processMessage(message: SQSMessage): Promise<void> {
     await CheckAndUpdateSpamInDb(customMailId, replyFrom, warmupId, to);
 
     if (shouldReply) {
-      await sendEmail(
+      const success = await sendEmail(
         to,
         originalSubject,
         body,
         keyword,
         inReplyTo || "",
         referenceId || "",
-        replyFrom || CONFIGURATIONS[0].user
+        replyFrom
       );
 
-      console.log(`Replied to ${to}`);
-      // await logEmailResponse(warmupId, to, "REPLIED");
-    }
+      if (!success) {
+        console.error("Failed to send email");
+        return;
+      }
 
-    const endTime = performance.now();
-    console.log(
-      "Time taken to process message: ",
-      (endTime - startTime) / 1000
-    );
+
+      console.log(`Replied to ${to}`);
+      await logEmailResponse(warmupId, to, "REPLIED");
+    }
 
     // Will only be triggered if every thing is ok
     await deleteMessageFromQueue(message.ReceiptHandle);
@@ -115,11 +118,6 @@ async function processMessagesAndScheduleNext(): Promise<void> {
 }
 
 console.log("💻 Warmup Server Started");
-console.log(
-  "Will check for new messages every",
-  REFRESH_TIME_IM_MILLISECONDS / 1000,
-  "seconds"
-);
-
 // Start the recursive message handling process
 processMessagesAndScheduleNext();
+
