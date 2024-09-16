@@ -34,7 +34,7 @@ export async function logEmailResponse(
   recipientEmail: string,
   status: "REPLIED" | "IN_SPAM" | "SENT"
 ): Promise<void> {
-  const queryText = `s
+  const queryText = `
     INSERT INTO "WarmupEmailLogs" ("id", "warmupId", "recipientEmail", "status", "sentAt")
     VALUES (gen_random_uuid(), $1, $2, $3, NOW())
   `;

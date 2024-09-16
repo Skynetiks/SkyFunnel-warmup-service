@@ -21,7 +21,7 @@ export async function receiveMessageFromQueue(): Promise<SQSMessage[] | null> {
   return new Promise(async(resolve, reject) => {
     const res = await sqs.send(new ReceiveMessageCommand(params))
     if(res.Messages){
-      const filtered = res.Messages.filter((message) => parseInt(message.Attributes?.ApproximateReceiveCount || "0") > 2);
+      const filtered = res.Messages.filter((message) => parseInt(message.Attributes?.ApproximateReceiveCount || "0") < 2);
     
       resolve(filtered as SQSMessage[]);
     } 
