@@ -192,7 +192,7 @@ export async function CheckAndUpdateSpamInDb(
 
     if (result) {
       if (result.isInSpam) {
-        await logEmailResponse(warmupId, emailTo, "SPAM");
+        await logEmailResponse(warmupId, emailTo, "IN_SPAM");
         console.log("Email is in Spam");
       } else {
         console.log("Email is Not in Spam");

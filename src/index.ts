@@ -25,17 +25,22 @@ const EmailSchema = z.object({
   shouldReply: z.boolean().default(true),
 });
 
-process.on('uncaughtException', function (err) {
+process.on("uncaughtException", function (err) {
   console.error(err);
   console.log("Node NOT Exiting...");
 });
 
 async function processMessage(message: SQSMessage): Promise<void> {
   let email = "";
+  const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024; // Convert to MB
+
+
   try {
     email = JSON.parse(message.Body);
   } catch (jsonError) {
-    console.error(`JSON Parsing Error for message with Receipt Handle: ${message.ReceiptHandle}. Error: ${jsonError}`);
+    console.error(
+      `JSON Parsing Error for message with Receipt Handle: ${message.ReceiptHandle}. Error: ${jsonError}`
+    );
     // Skip processing this message but don't crash the entire app
     return;
   }
@@ -75,7 +80,6 @@ async function processMessage(message: SQSMessage): Promise<void> {
         return;
       }
 
-
       console.log(`Replied to ${to}`);
       await logEmailResponse(warmupId, to, "REPLIED");
     }
@@ -112,12 +116,13 @@ async function handleMessages(): Promise<void> {
   await Promise.all(promiseArray);
 }
 
+
 async function processMessagesAndScheduleNext(): Promise<void> {
   await handleMessages();
+
   setTimeout(processMessagesAndScheduleNext, REFRESH_TIME_IM_MILLISECONDS);
 }
 
 console.log("💻 Warmup Server Started");
 // Start the recursive message handling process
 processMessagesAndScheduleNext();
-

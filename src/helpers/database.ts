@@ -32,9 +32,9 @@ export default pool;
 export async function logEmailResponse(
   warmupId: string,
   recipientEmail: string,
-  status: "REPLIED" | "SPAM" | "SENT"
+  status: "REPLIED" | "IN_SPAM" | "SENT"
 ): Promise<void> {
-  const queryText = `
+  const queryText = `s
     INSERT INTO "WarmupEmailLogs" ("id", "warmupId", "recipientEmail", "status", "sentAt")
     VALUES (gen_random_uuid(), $1, $2, $3, NOW())
   `;
