@@ -151,14 +151,5 @@ async function processMessagesAndScheduleNext(): Promise<void> {
 }
 
 console.log("💻 Warmup Server Started");
-Logger.criticalError(
-  "[SpamCheck] Error while connecting to the IMAP server.",
-  {
-    action: "Connection Error",
-    error:"Chekcoign" ,
-
-  },
-  ["Check credentials", "Ensure IMAP settings are correct"]
-);
 // Start the recursive message handling process
 processMessagesAndScheduleNext();
