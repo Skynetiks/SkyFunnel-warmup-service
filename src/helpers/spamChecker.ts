@@ -1,157 +1,154 @@
-import Imap, { Config } from "imap";
-import { simpleParser, ParsedMail, Source } from "mailparser";
 import { getEmailCredentials, logEmailResponse } from "./database";
+import Logger from "../logger";
+import { ImapFlow } from "imapflow";
 
-interface CheckEmailInSpamOptions {
-  email: string;
-  password: string;
-  customId: string;
+interface ProviderConfig {
+  host: string;
+  port: number;
+  secure: boolean;
+  spamFolder: string;
 }
 
-interface SpamCheckResult {
-  customId: string;
-  isInSpam: boolean;
-  email: string;
+interface Email {
+  subject: string;
 }
 
-/**
- * Helper function to Check if an email is in Spam or not.
- * @param {CheckEmailInSpamOptions} options - Options for checking an email in Spam.
- * @returns {Promise<SpamCheckResult | undefined>} - Promise that resolves to a SpamCheckResult object or undefined if the email is not in Spam.
- */
-export async function checkEmailInSpam({
-  email,
-  password,
-  customId,
-}: CheckEmailInSpamOptions): Promise<SpamCheckResult | undefined> {
-  const imapConfig: Config = {
-    user: email,
-    password: password,
+// Logger class for error logging
+
+const providers: Record<string, ProviderConfig> = {
+  gmail: {
     host: "imap.gmail.com",
     port: 993,
-    tls: true,
-    tlsOptions: { rejectUnauthorized: false }, // Ignore self-signed certificates
-  };
+    secure: true,
+    spamFolder: "[Gmail]/Spam",
+  },
+  outlook: {
+    host: "outlook.office365.com",
+    port: 993,
+    secure: true,
+    spamFolder: "Spam",
+  },
+  skyfunnel: {
+    host: "box.skyfunnel.us",
+    port: 993,
+    secure: true,
+    spamFolder: "SPAM",
+  },
+};
 
-  const imap = new Imap(imapConfig);
+async function checkEmailInSpam(
+  email: Email,
+  provider: keyof typeof providers,
+  credentials: { user: string; pass: string }
+): Promise<boolean> {
+  let inSpam = false;
+  Logger.info(`[CheckSpam] Checking email: ${email.subject}`);
+  const { user, pass } = credentials;
+  const providerConfig = providers[provider];
 
-  const openInbox = async (folderName: string): Promise<void> => {
-    try {
-      return new Promise((resolve, reject) => {
-        imap.openBox(folderName, false, (err) => {
-          if (err) {
-            return reject(new Error(`Failed to open folder: ${folderName}`));
-          }
-          resolve();
-        });
-      });
-    } catch (error: any) {
-      console.error(`Error opening inbox: ${error.message}`);
-    }
-  };
+  if (!providerConfig) {
+    Logger.criticalError(
+      "[SpamCheck] Config for the specified provider is not defined.",
+      { action: "Getting Provider Config", provider: provider },
+      ["Check if the provider is correctly defined"]
+    );
+    return false;
+  }
 
-  const searchEmails = async (): Promise<number[]> => {
-    try {
-      return new Promise((resolve, reject) => {
-        imap.search(["UNSEEN"], (err, results) => {
-          if (err) {
-            return reject(new Error("Failed to search emails."));
-          }
-          resolve(results || []);
-        });
-      });
-    } catch (error: any) {
-      console.error(`Error searching emails: ${error.message}`);
-      return [];
-    }
-  };
-
-
-  const fetchEmails = async (results: number[]): Promise<boolean> => {
-    try {
-      return new Promise((resolve, reject) => {
-        if (results.length === 0) {
-          return resolve(false);
-        }
-
-        const f = imap.fetch(results, { bodies: "", markSeen: true });
-        let emailFound = false;
-
-        f.on("message", (msg, seqno) => {
-          msg.on("body", (stream: Source) => {
-            simpleParser(stream, async (err: Error | null, mail: ParsedMail) => {
-              if (err) {
-                return reject(new Error("Failed to parse email."));
-              }
-
-              const subject = mail.subject || "";
-              if (subject.includes(customId)) {
-                emailFound = true;
-                resolve(true);
-              } else {
-                resolve(false);
-              }
-            });
-          });
-        });
-
-        f.once("error", (err) => {
-          reject(new Error(`Failed to fetch messages: ${err.message}`));
-        });
-
-   
-      });
-    } catch (error: any) {
-      console.error(`Error fetching emails: ${error.message}`);
-      return false;
-    }
-  };
-
-  const connectImap = async (): Promise<void> => {
-    try {
-      return new Promise((resolve, reject) => {
-        imap.once("ready", resolve);
-        imap.once("error", (err: Error) =>
-          reject(new Error(`IMAP connection error: ${err.message}`))
-        );
-        imap.connect();
-      });
-    } catch (error: any) {
-      console.error(`Error connecting to IMAP: ${error.message}`);
-      throw error;
-    }
-  };
-
-  const endImapConnection = async (): Promise<void> => {
-    try {
-      return new Promise((resolve) => {
-        imap.once("end", () => {
-          resolve();
-        });
-        imap.end();
-      });
-    } catch (error: any) {
-      console.error(`Error ending IMAP connection: ${error.message}`);
-      throw error;
-    }
-  };
+  const { host, port, secure, spamFolder } = providerConfig;
+  const client = new ImapFlow({
+    host,
+    port,
+    secure,
+    auth: { user, pass },
+    logger: false,
+  });
 
   try {
-    await connectImap();
-    // TODO: Add support for other email services
-    await openInbox("[Gmail]/Spam"); // Correct path for the Spam folder
-    const results = await searchEmails();
-    const isInSpam = await fetchEmails(results);
-    await endImapConnection();
+    await client.connect();
+    Logger.info(`[CheckSpam] Connected to ${provider} for user: ${user}`);
 
-    return {
-      customId,
-      isInSpam,
-      email,
-    };
+    // Lock the spam folder
+    const lock = await client.getMailboxLock(spamFolder);
+
+    try {
+      const searchResult = await client.search({
+        header: { Subject: email.subject },
+        
+      });
+
+      if (searchResult.length === 0) {
+        Logger.info(
+          `[CheckSpam] No emails found in ${spamFolder} matching subject: ${email.subject}`
+        );
+        return false; // Email not in spam
+      }
+
+      Logger.info(
+        `[CheckSpam] Found email(s) in ${spamFolder} with UID(s): ${searchResult.join(
+          ", "
+        )}`
+      );
+      const results = await client.fetch(searchResult, { envelope: true });
+      // Loop through the results and check if the email subject matches
+
+      for await (const result of results) {
+        if (result.envelope.subject.includes(email.subject)) {
+          Logger.info(
+            `[CheckSpam] Email with subject "${email.subject}" found in spam.`
+          );
+          inSpam = true;
+          // NOTE: DO NOT EARLY BREAK OR RETURN HERE. IT WILL CAUSE DEAD LOOP
+          // NOTE: DO NOT USE ANY IMAP COMMANDS HERE. IT WILL CAUSE DEAD LOOP
+        }
+      }
+
+      if (!inSpam) {
+        Logger.info(
+          `[CheckSpam] Email with subject "${email.subject}" not found in spam.`
+        );
+      }
+    } catch (err) {
+      Logger.criticalError(
+        "[SpamCheck] Error while searching emails in the spam folder.",
+        {
+          action: "Search in Spam Folder",
+          emailSubject: email.subject,
+          error: err,
+          provider: provider,
+          spamFolder: spamFolder,
+        },
+        [
+          "Check if the spam folder is correctly defined",
+          "Something Went Wrong While Searching Emails",
+        ]
+      );
+
+      inSpam = false; // Default to false in case of error
+    } finally {
+      await lock.release();
+    }
   } catch (err) {
-    console.error("Error in checkEmailInSpam:", err);
-    await endImapConnection();
+    Logger.criticalError(
+      "[SpamCheck] Error while connecting to the IMAP server.",
+      {
+        action: "Connection Error",
+        emailSubject: email.subject,
+        error: err,
+        provider: provider,
+        spamFolder: spamFolder,
+      },
+      ["Check credentials", "Ensure IMAP settings are correct"]
+    );
+
+    inSpam = false; // Default to false in case of connection error
+  } finally {
+    await Promise.race([
+      client.logout(),
+      new Promise((_, reject) => setTimeout(() => reject("Timed out"), 5000)),
+    ]);
+    console.log(`Logged out from ${provider}.`);
+    return inSpam;
   }
 }
 
@@ -177,28 +174,38 @@ export async function CheckAndUpdateSpamInDb(
 
     // Finding the correct configuration for the reply email to use is to fetch spam folder
     if (!emailCredentials) {
-      console.log("Email Credentials not found");
+      Logger.error("[CheckAndUpdateSpamInDb] Email Credentials not found", {
+        email: replyEmail,
+      });
       return;
     }
 
+    const { emailId: user, password: pass, service } = emailCredentials;
 
-    const { emailId: user, password: pass } = emailCredentials;
-
-    const result = await checkEmailInSpam({
-      email: user,
-      password: pass,
-      customId,
-    });
+    const result = await checkEmailInSpam(
+      {
+        subject: customId,
+      },
+      service,
+      { user, pass }
+    );
 
     if (result) {
-      if (result.isInSpam) {
-        await logEmailResponse(warmupId, emailTo, "IN_SPAM");
-        console.log("Email is in Spam");
-      } else {
-        console.log("Email is Not in Spam");
-      }
+      await logEmailResponse(warmupId, emailTo, "IN_SPAM");
+    } else {
+      Logger.info(`[CheckAndUpdateSpamInDb] Email is Not in Spam`);
     }
   } catch (error) {
-    console.error("Error checking email:", error);
+    Logger.criticalError(
+      "[SpamCheck] Error checking email:",
+      {
+        action: "Checking Email",
+        error,
+        customId,
+        emailTo,
+        sendingFrom: replyEmail,
+      },
+      ["Something Uncaught Error Happened While Checking Email"]
+    );
   }
 }
