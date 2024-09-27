@@ -2,6 +2,7 @@ import { DeleteMessageCommand, DeleteMessageCommandInput, ReceiveMessageCommand,
 import { sqs, QUEUE_URL } from './aws';
 import { MAX_NUMBER_OF_MESSAGES_TO_PROCESS, VISIBILITY_TIMEOUT, WAIT_TIME_SECONDS } from '../data/config';
 import { parse } from 'dotenv';
+import Logger from '../logger';
 
 // Type for SQS message
 export interface SQSMessage {
@@ -43,7 +44,7 @@ export async function deleteMessageFromQueue(receiptHandle: string): Promise<voi
     console.log('Message deleted from queue');
   }
   else {
-    console.error('Error deleting message:', res);
+    Logger.error("[DeleteMessageFromQueue] Error deleting message", { receiptHandle });
     throw new Error('Error deleting message');
   }
 }

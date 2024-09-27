@@ -6,11 +6,9 @@ import {
   deleteMessageFromQueue,
   SQSMessage,
 } from "./helpers/sqs";
-import {
-  CheckAndUpdateSpamInDb,
-  checkEmailInSpam,
-} from "./helpers/spamChecker";
+import { CheckAndUpdateSpamInDb } from "./helpers/spamChecker";
 import { REFRESH_TIME_IM_MILLISECONDS } from "./data/config";
+import Logger from "./logger";
 
 const EmailSchema = z.object({
   to: z.string(),
@@ -26,22 +24,35 @@ const EmailSchema = z.object({
 });
 
 process.on("uncaughtException", function (err) {
-  console.error(err);
-  console.log("Node NOT Exiting...");
+  Logger.criticalError(
+    "[Main] Uncaught Exception",
+    {
+      action: "Uncaught Exception",
+      error: err,
+    },
+    ["Something Uncaught Error Happened"]
+  );
 });
 
 async function processMessage(message: SQSMessage): Promise<void> {
   let email = "";
-  const memoryUsage = process.memoryUsage().heapUsed / 1024 / 1024; // Convert to MB
-
-
   try {
     email = JSON.parse(message.Body);
   } catch (jsonError) {
-    console.error(
-      `JSON Parsing Error for message with Receipt Handle: ${message.ReceiptHandle}. Error: ${jsonError}`
+    Logger.error(
+      "[ParsingMessage] JSON Parsing Error",
+      {
+        action: "JSON Parsing Error",
+        error: jsonError,
+        receiptHandle: message.ReceiptHandle,
+        message: message.Body,
+      },
+      [
+        "Something Went Wrong While Parsing Message",
+        "Make sure message is correct",
+      ]
     );
-    // Skip processing this message but don't crash the entire app
+
     return;
   }
 
@@ -60,6 +71,7 @@ async function processMessage(message: SQSMessage): Promise<void> {
     } = EmailSchema.parse(email);
 
     console.log("Processing Message With email: ", to);
+    Logger.info("[ProcessMessage] Processing Message With email: ", { to });
 
     // Ignore the situation of error and continues
     await CheckAndUpdateSpamInDb(customMailId, replyFrom, warmupId, to);
@@ -76,11 +88,11 @@ async function processMessage(message: SQSMessage): Promise<void> {
       );
 
       if (!success) {
-        console.error("Failed to send email");
+        Logger.error("[ProcessMessage] Failed to send email", { to });
         return;
       }
 
-      console.log(`Replied to ${to}`);
+      Logger.info("[ProcessMessage] Replied to", { to });
       await logEmailResponse(warmupId, to, "REPLIED");
     }
 
@@ -88,7 +100,17 @@ async function processMessage(message: SQSMessage): Promise<void> {
     await deleteMessageFromQueue(message.ReceiptHandle);
   } catch (error) {
     // Got an unexpected error, log it and continue Most probably a parse error for the body or error while sending email
-    console.error("Error processing message:", error);
+    Logger.criticalError(
+      "[ProcessMessage] Error processing message:",
+      {
+        action: "Processing Message",
+        error,
+      },
+      [
+        "Something Went Wrong While Processing Message",
+        "Make sure message is correct",
+      ]
+    );
   }
 }
 
@@ -106,16 +128,21 @@ async function handleMessages(): Promise<void> {
       promiseArray.push(promise);
     } catch (error) {
       // Got an unexpected error, log it and continue
-      // TODO: Error must be logged to Sentry or equivalent other logging service
-      console.error(
-        `Error Processing a Message with a Receipt Handle: ${message.ReceiptHandle} Error: ${error}`
+     
+      Logger.criticalError(
+        "[HandleMessages] Error Processing a Message with a Receipt Handle:",
+        {
+          action: "Processing Message",
+          error,
+          receiptHandle: message.ReceiptHandle,
+        },
+        ["Something Went Wrong While Processing Message", "Unhandled Error"]
       );
     }
   }
 
   await Promise.all(promiseArray);
 }
-
 
 async function processMessagesAndScheduleNext(): Promise<void> {
   await handleMessages();
