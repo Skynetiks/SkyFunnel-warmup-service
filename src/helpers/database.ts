@@ -1,11 +1,17 @@
-import { Pool } from "pg";
+import pg from "pg";
 import dotenv from "dotenv";
-import { decryptToken } from "./encryption";
+import fs from "fs";
 import Logger from "../logger";
+import { decryptToken } from "./encryption";
+
+const { Pool } = pg;
 dotenv.config();
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
+  ssl: {
+    ca: fs.readFileSync("certs/us-east-1-bundle.pem"),
+  },
 });
 
 export const query = async (text: string, params: (string | number)[]) => {
@@ -13,7 +19,7 @@ export const query = async (text: string, params: (string | number)[]) => {
     const result = await pool.query(text, params);
     return result;
   } catch (error) {
-    console.error("Error querying database:", error);
+    console.error(error);
     throw error;
   }
 };
