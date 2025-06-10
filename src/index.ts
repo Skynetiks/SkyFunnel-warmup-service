@@ -7,7 +7,7 @@ import {
   SQSMessage,
 } from "./helpers/sqs";
 import { CheckAndUpdateSpamInDb } from "./helpers/spamChecker";
-import { REFRESH_TIME_IM_MILLISECONDS } from "./data/config";
+import { REFRESH_TIME_IN_MILLISECONDS } from "./data/config";
 import Logger from "./logger";
 
 const EmailSchema = z.object({
@@ -147,7 +147,7 @@ async function handleMessages(): Promise<void> {
 async function processMessagesAndScheduleNext(): Promise<void> {
   await handleMessages();
 
-  setTimeout(processMessagesAndScheduleNext, REFRESH_TIME_IM_MILLISECONDS);
+  setTimeout(processMessagesAndScheduleNext, REFRESH_TIME_IN_MILLISECONDS);
 }
 
 console.log("💻 Warmup Server Started");
