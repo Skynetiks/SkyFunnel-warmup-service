@@ -1,6 +1,6 @@
 services:
   server:
-    build: .
+    image: ${IMAGE_NAME}:latest
     command: ["npm", "run", "start"]
     ports:
       - "3000:3000"
