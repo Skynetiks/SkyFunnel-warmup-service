@@ -27,7 +27,9 @@ jobs:
 
       # 3️⃣ Build the Docker image
       - name: Build Docker image
-        run: docker build -t $IMAGE_NAME:$TAG .
+        run: |
+          echo $IMAGE_NAME
+          docker build -t $IMAGE_NAME:$TAG .
 
       # 4️⃣ Push the image to Docker Hub
       - name: Push Docker image
