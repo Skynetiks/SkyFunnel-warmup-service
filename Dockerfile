@@ -13,8 +13,6 @@ RUN npm i
 # Copy the rest of the source code
 COPY . .
 
-RUN npm run build
-
 # Set environment variables
 ENV NODE_ENV=production
 ENV PORT=3000
