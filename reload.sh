@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_PATH="$HOME/SkyFunnel-email-queue"
+REPO_PATH="/home/root/SkyFunnel-warmup-service"
 DOCKER_COMPOSE_FILE="$REPO_PATH/docker-compose.yml"
 
 if [ -f "$DOCKER_COMPOSE_FILE" ]; then
