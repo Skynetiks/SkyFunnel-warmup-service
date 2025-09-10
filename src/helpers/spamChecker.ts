@@ -77,6 +77,13 @@ async function checkEmailInSpam(
         
       });
 
+      if (!searchResult) {
+        Logger.info(
+          `[CheckSpam] Search returned null or undefined for subject: ${email.subject}`
+        );
+        return false; // Email not in spam
+      }
+
       if (searchResult.length === 0) {
         Logger.info(
           `[CheckSpam] No emails found in ${spamFolder} matching subject: ${email.subject}`
@@ -93,13 +100,19 @@ async function checkEmailInSpam(
       // Loop through the results and check if the email subject matches
 
       for await (const result of results) {
-        if (result.envelope.subject.includes(email.subject)) {
+
+        if (result.envelope && result.envelope.subject && result.envelope.subject.includes(email.subject)) {
           Logger.info(
             `[CheckSpam] Email with subject "${email.subject}" found in spam.`
           );
           inSpam = true;
           // NOTE: DO NOT EARLY BREAK OR RETURN HERE. IT WILL CAUSE DEAD LOOP
           // NOTE: DO NOT USE ANY IMAP COMMANDS HERE. IT WILL CAUSE DEAD LOOP
+        } else {
+          Logger.info(
+            `[CheckSpam] Email with UID ${result.uid} does not match subject "${email.subject}".`
+          );
+          inSpam = false;
         }
       }
 
