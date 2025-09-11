@@ -1,6 +1,40 @@
 import nodemailer, { Transporter } from "nodemailer";
 import Mail from "nodemailer/lib/mailer/index";
 import { getEmailCredentials } from "./database";
+import net from "net";
+
+// Test network connectivity to Gmail SMTP
+async function testGmailConnectivity(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const timeout = 10000; // 10 seconds
+
+    socket.setTimeout(timeout);
+
+    socket.on("connect", () => {
+      console.log("[NetworkTest] Successfully connected to smtp.gmail.com:587");
+      socket.destroy();
+      resolve(true);
+    });
+
+    socket.on("timeout", () => {
+      console.log("[NetworkTest] Connection timeout to smtp.gmail.com:587");
+      socket.destroy();
+      resolve(false);
+    });
+
+    socket.on("error", (err) => {
+      console.log(
+        "[NetworkTest] Connection error to smtp.gmail.com:587:",
+        err.message
+      );
+      socket.destroy();
+      resolve(false);
+    });
+
+    socket.connect(587, "smtp.gmail.com");
+  });
+}
 
 export const getNodemailerTransport = async (
   replyFrom: string
@@ -17,18 +51,25 @@ export const getNodemailerTransport = async (
 
     // Create a nodemailer transport based on the current configuration
     const transport = nodemailer.createTransport({
-      service: config.service,
+      host: "smtp.gmail.com",
+      port: 587,
+      secure: false, // true for 465, false for other ports
       auth: {
         user: config.emailId,
         pass: config.password,
       },
       // Add timeout settings to prevent hanging
-      connectionTimeout: 15000, // 15 seconds
-      greetingTimeout: 10000, // 10 seconds
-      socketTimeout: 15000, // 15 seconds
+      connectionTimeout: 30000, // 30 seconds
+      greetingTimeout: 15000, // 15 seconds
+      socketTimeout: 30000, // 30 seconds
       // Add debug logging
       debug: true,
       logger: true,
+      // Add TLS options
+      tls: {
+        rejectUnauthorized: false,
+        ciphers: "SSLv3",
+      },
     });
 
     console.log(
@@ -43,6 +84,18 @@ export const getNodemailerTransport = async (
       console.warn(
         `[GetNodemailerTransport] WARNING: Password contains spaces for ${replyFrom}. Gmail app passwords should not have spaces.`
       );
+    }
+
+    // Test network connectivity before returning transport
+    console.log(
+      "[GetNodemailerTransport] Testing network connectivity to Gmail SMTP..."
+    );
+    const isConnected = await testGmailConnectivity();
+    if (!isConnected) {
+      console.error(
+        "[GetNodemailerTransport] Network connectivity test failed - Gmail SMTP is not reachable"
+      );
+      return null;
     }
 
     return transport;
