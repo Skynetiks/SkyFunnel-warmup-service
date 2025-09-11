@@ -5,19 +5,36 @@ import { getEmailCredentials } from "./database";
 export const getNodemailerTransport = async (
   replyFrom: string
 ): Promise<Transporter | null> => {
-  // Get the current configuration
-  const config = await getEmailCredentials(replyFrom);
-  if (!config) return null;
-  // Create a nodemailer transport based on the current configuration
-  const transport = nodemailer.createTransport({
-    service: config.service,
-    auth: {
-      user: config.emailId,
-      pass: config.password,
-    },
-  });
+  try {
+    // Get the current configuration
+    const config = await getEmailCredentials(replyFrom);
+    if (!config) {
+      console.error(
+        `[GetNodemailerTransport] No config found for ${replyFrom}`
+      );
+      return null;
+    }
 
-  return transport;
+    // Create a nodemailer transport based on the current configuration
+    const transport = nodemailer.createTransport({
+      service: config.service,
+      auth: {
+        user: config.emailId,
+        pass: config.password,
+      },
+    });
+
+    // Verify the transport works
+    await transport.verify();
+    console.log(`[GetNodemailerTransport] Transport verified for ${replyFrom}`);
+    return transport;
+  } catch (error) {
+    console.error(
+      `[GetNodemailerTransport] Error creating transport for ${replyFrom}:`,
+      error
+    );
+    return null;
+  }
 };
 
 /**
@@ -35,18 +52,27 @@ export async function sendEmail(
   referenceId: string,
   replyFrom: string
 ): Promise<boolean> {
-  const mailOptions = {
-    from: replyFrom,
-    to,
-    subject: `${subject}`,
-    text: body,
-    references: [referenceId],
-    inReplyTo: inReplyTo,
-  } satisfies Mail.Options;
+  try {
+    const mailOptions = {
+      from: replyFrom,
+      to,
+      subject: `${subject}`,
+      text: body,
+      references: [referenceId],
+      inReplyTo: inReplyTo,
+    } satisfies Mail.Options;
 
-  const transport = await getNodemailerTransport(replyFrom);
-  if (!transport) return false
+    const transport = await getNodemailerTransport(replyFrom);
+    if (!transport) {
+      console.error(`[SendEmail] Failed to get transport for ${replyFrom}`);
+      return false;
+    }
 
-  await transport.sendMail(mailOptions);
-  return true;
+    await transport.sendMail(mailOptions);
+    console.log(`[SendEmail] Successfully sent email to ${to}`);
+    return true;
+  } catch (error) {
+    console.error(`[SendEmail] Error sending email to ${to}:`, error);
+    return false;
+  }
 }

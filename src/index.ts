@@ -36,6 +36,7 @@ process.on("uncaughtException", function (err) {
 
 async function processMessage(message: SQSMessage): Promise<void> {
   let email = "";
+
   try {
     email = JSON.parse(message.Body);
   } catch (jsonError) {
@@ -52,8 +53,7 @@ async function processMessage(message: SQSMessage): Promise<void> {
         "Make sure message is correct",
       ]
     );
-
-    return;
+    return; // Don't delete message on parsing error
   }
 
   try {
@@ -89,7 +89,7 @@ async function processMessage(message: SQSMessage): Promise<void> {
 
       if (!success) {
         Logger.error("[ProcessMessage] Failed to send email", { to });
-        return;
+        return; // Don't delete message on email send failure
       }
 
       Logger.info("[ProcessMessage] Replied to", { to });
@@ -98,6 +98,9 @@ async function processMessage(message: SQSMessage): Promise<void> {
 
     // Will only be triggered if every thing is ok
     await deleteMessageFromQueue(message.ReceiptHandle);
+    Logger.info("[ProcessMessage] Message deleted from queue", {
+      receiptHandle: message.ReceiptHandle,
+    });
   } catch (error) {
     // Got an unexpected error, log it and continue Most probably a parse error for the body or error while sending email
     Logger.criticalError(
@@ -105,12 +108,14 @@ async function processMessage(message: SQSMessage): Promise<void> {
       {
         action: "Processing Message",
         error,
+        receiptHandle: message.ReceiptHandle,
       },
       [
         "Something Went Wrong While Processing Message",
         "Make sure message is correct",
       ]
     );
+    // Don't delete message on error - let it retry
   }
 }
 
@@ -128,7 +133,7 @@ async function handleMessages(): Promise<void> {
       promiseArray.push(promise);
     } catch (error) {
       // Got an unexpected error, log it and continue
-     
+
       Logger.criticalError(
         "[HandleMessages] Error Processing a Message with a Receipt Handle:",
         {

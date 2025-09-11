@@ -41,16 +41,27 @@ export async function logEmailResponse(
   recipientEmail: string,
   status: "REPLIED" | "IN_SPAM" | "SENT"
 ): Promise<void> {
-  const queryText = `
-    INSERT INTO "WarmupEmailLogs" ("id", "warmupId", "recipientEmail", "status", "sentAt")
-    VALUES (gen_random_uuid(), $1, $2, $3, NOW())
-  `;
-  const values = [warmupId, recipientEmail, status];
+  try {
+    const queryText = `
+      INSERT INTO "WarmupEmailLogs" ("id", "warmupId", "recipientEmail", "status", "sentAt")
+      VALUES (gen_random_uuid(), $1, $2, $3, NOW())
+    `;
+    const values = [warmupId, recipientEmail, status];
 
-  await query(
-    queryText,
-    values.map((v) => (typeof v === "object" ? JSON.stringify(v) : String(v)))
-  );
+    await query(
+      queryText,
+      values.map((v) => (typeof v === "object" ? JSON.stringify(v) : String(v)))
+    );
+    console.log(
+      `[LogEmailResponse] Successfully logged ${status} for ${recipientEmail}`
+    );
+  } catch (error) {
+    console.error(
+      `[LogEmailResponse] Error logging email response for ${recipientEmail}:`,
+      error
+    );
+    throw error; // Re-throw to be caught by the calling function
+  }
 }
 type EmailCredentials = {
   emailId: string;
