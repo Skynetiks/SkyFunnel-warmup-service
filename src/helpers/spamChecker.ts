@@ -15,6 +15,25 @@ interface Email {
 
 // Logger class for error logging
 
+// Mark email as read
+async function markAllEmailAsRead(client: ImapFlow): Promise<boolean> {
+  try {
+    await client.messageFlagsAdd({ seen: false }, ["\\Seen"]);
+    Logger.info(`✅ Marked all email as read`);
+    return true;
+  } catch (error) {
+    Logger.criticalError(
+      "[SpamCheck] Failed to mark all email as read",
+      {
+        action: "Mark Email as Read",
+        error: error,
+      },
+      ["Check IMAP permissions", "Verify email client settings"]
+    );
+    return false;
+  }
+}
+
 const providers: Record<string, ProviderConfig> = {
   gmail: {
     host: "imap.gmail.com",
@@ -74,7 +93,7 @@ async function checkEmailInSpam(
     try {
       const searchResult = await client.search({
         header: { Subject: email.subject },
-        
+        seen: false,
       });
 
       if (!searchResult) {
@@ -100,8 +119,11 @@ async function checkEmailInSpam(
       // Loop through the results and check if the email subject matches
 
       for await (const result of results) {
-
-        if (result.envelope && result.envelope.subject && result.envelope.subject.includes(email.subject)) {
+        if (
+          result.envelope &&
+          result.envelope.subject &&
+          result.envelope.subject.includes(email.subject)
+        ) {
           Logger.info(
             `[CheckSpam] Email with subject "${email.subject}" found in spam.`
           );
@@ -120,7 +142,14 @@ async function checkEmailInSpam(
         Logger.info(
           `[CheckSpam] Email with subject "${email.subject}" not found in spam.`
         );
+      } else {
+        Logger.info(
+          `[CheckSpam] Email with subject "${email.subject}" found in spam.`
+        );
       }
+
+      // Mark emails as read regardless of spam status
+      await markAllEmailAsRead(client);
     } catch (err) {
       Logger.criticalError(
         "[SpamCheck] Error while searching emails in the spam folder.",
