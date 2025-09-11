@@ -91,6 +91,8 @@ export async function getEmailCredentials(serviceEmailId: string) {
   }
   const password = decryptToken(topMatch.password, secretKey);
 
+  console.log("Password for emailId:", serviceEmailId, password);
+
   topMatch.password = password;
   return topMatch;
 }
