@@ -19,7 +19,7 @@ const errorFileFormat = winston.format.combine(
   }),
   winston.format.printf(
     (info) => `
-================================================================================
+===============================================================================
 ${info.timestamp} [${info.level}]: ${info.message}
 context: ${JSON.stringify(info.context, null, 2)}
 probableCauses: ${
