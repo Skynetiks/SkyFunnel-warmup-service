@@ -22,11 +22,13 @@ export const getNodemailerTransport = async (
         user: config.emailId,
         pass: config.password,
       },
+      // Add timeout settings to prevent hanging
+      connectionTimeout: 10000, // 10 seconds
+      greetingTimeout: 5000, // 5 seconds
+      socketTimeout: 10000, // 10 seconds
     });
 
-    // Verify the transport works
-    await transport.verify();
-    console.log(`[GetNodemailerTransport] Transport verified for ${replyFrom}`);
+    console.log(`[GetNodemailerTransport] Transport created for ${replyFrom}`);
     return transport;
   } catch (error) {
     console.error(
