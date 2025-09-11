@@ -4,36 +4,49 @@ import { getEmailCredentials } from "./database";
 import net from "net";
 
 // Test network connectivity to Gmail SMTP
-async function testGmailConnectivity(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const socket = new net.Socket();
-    const timeout = 10000; // 10 seconds
+async function testGmailConnectivity(): Promise<{
+  port587: boolean;
+  port465: boolean;
+}> {
+  const testPort = (port: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const socket = new net.Socket();
+      const timeout = 5000; // 5 seconds
 
-    socket.setTimeout(timeout);
+      socket.setTimeout(timeout);
 
-    socket.on("connect", () => {
-      console.log("[NetworkTest] Successfully connected to smtp.gmail.com:587");
-      socket.destroy();
-      resolve(true);
+      socket.on("connect", () => {
+        console.log(
+          `[NetworkTest] Successfully connected to smtp.gmail.com:${port}`
+        );
+        socket.destroy();
+        resolve(true);
+      });
+
+      socket.on("timeout", () => {
+        console.log(
+          `[NetworkTest] Connection timeout to smtp.gmail.com:${port}`
+        );
+        socket.destroy();
+        resolve(false);
+      });
+
+      socket.on("error", (err) => {
+        console.log(
+          `[NetworkTest] Connection error to smtp.gmail.com:${port}:`,
+          err.message
+        );
+        socket.destroy();
+        resolve(false);
+      });
+
+      socket.connect(port, "smtp.gmail.com");
     });
+  };
 
-    socket.on("timeout", () => {
-      console.log("[NetworkTest] Connection timeout to smtp.gmail.com:587");
-      socket.destroy();
-      resolve(false);
-    });
+  const [port587, port465] = await Promise.all([testPort(587), testPort(465)]);
 
-    socket.on("error", (err) => {
-      console.log(
-        "[NetworkTest] Connection error to smtp.gmail.com:587:",
-        err.message
-      );
-      socket.destroy();
-      resolve(false);
-    });
-
-    socket.connect(587, "smtp.gmail.com");
-  });
+  return { port587, port465 };
 }
 
 export const getNodemailerTransport = async (
@@ -90,15 +103,41 @@ export const getNodemailerTransport = async (
     console.log(
       "[GetNodemailerTransport] Testing network connectivity to Gmail SMTP..."
     );
-    const isConnected = await testGmailConnectivity();
-    if (!isConnected) {
+    const connectivity = await testGmailConnectivity();
+
+    if (!connectivity.port587 && !connectivity.port465) {
       console.error(
-        "[GetNodemailerTransport] Network connectivity test failed - Gmail SMTP is not reachable"
+        "[GetNodemailerTransport] Network connectivity test failed - Gmail SMTP is not reachable on either port 587 or 465"
       );
       return null;
     }
 
-    return transport;
+    // Use the available port
+    if (connectivity.port465) {
+      console.log(
+        "[GetNodemailerTransport] Using port 465 (SSL) for Gmail SMTP"
+      );
+      const sslTransport = nodemailer.createTransport({
+        host: "smtp.gmail.com",
+        port: 465,
+        secure: true, // true for 465, false for other ports
+        auth: {
+          user: config.emailId,
+          pass: config.password,
+        },
+        connectionTimeout: 30000,
+        greetingTimeout: 15000,
+        socketTimeout: 30000,
+        debug: true,
+        logger: true,
+      });
+      return sslTransport;
+    } else {
+      console.log(
+        "[GetNodemailerTransport] Using port 587 (STARTTLS) for Gmail SMTP"
+      );
+      return transport;
+    }
   } catch (error) {
     console.error(
       `[GetNodemailerTransport] Error creating transport for ${replyFrom}:`,
