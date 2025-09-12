@@ -76,8 +76,8 @@ export const getNodemailerTransport = async (
       greetingTimeout: 15000, // 15 seconds
       socketTimeout: 30000, // 30 seconds
       // Add debug logging
-      debug: true,
-      logger: true,
+      // debug: true,
+      // logger: true,
       // Add TLS options
       tls: {
         rejectUnauthorized: false,

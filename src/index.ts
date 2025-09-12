@@ -152,7 +152,7 @@ async function handleMessages(): Promise<void> {
 async function processMessagesAndScheduleNext(): Promise<void> {
   await handleMessages();
 
-  setImmediate(processMessagesAndScheduleNext);
+  setTimeout(processMessagesAndScheduleNext, 5 * 60 * 1000); // 5 minutes
 }
 
 console.log("💻 Warmup Server Started");
