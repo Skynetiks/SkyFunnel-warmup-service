@@ -2,7 +2,12 @@ import nodemailer, { Transporter } from "nodemailer";
 import Mail from "nodemailer/lib/mailer/index";
 import { getEmailCredentials } from "./database";
 import net from "net";
-import { isEmailBlocked, markAuthenticationFailure, isEmailInCooldownList, addToWarmupCooldownList } from "./redis";
+import {
+  isEmailBlocked,
+  markAuthenticationFailure,
+  isEmailInCooldownList,
+  addToWarmupCooldownList,
+} from "./redis";
 import Logger from "../logger";
 
 // Test network connectivity to Gmail SMTP
@@ -73,6 +78,8 @@ export const getNodemailerTransport = async (
         user: config.emailId,
         pass: config.password,
       },
+      debug: false, // Disable verbose SMTP debug logs
+      logger: false, // Disable nodemailer's built-in logger
     });
     return transport;
   } catch (error) {
@@ -174,15 +181,17 @@ export async function sendEmail(
             to,
             attempt,
           },
-          ["Email will be added to cooldown list for 2 days to prevent brute force attacks"]
+          [
+            "Email will be added to cooldown list for 2 days to prevent brute force attacks",
+          ]
         );
 
         // Add email to cooldown list for 2 days
         await addToWarmupCooldownList(replyFrom);
-        
+
         // Also mark for short-term blocking (8 hours)
         await markAuthenticationFailure(replyFrom);
-        
+
         return false; // Stop retrying on auth error
       }
 
