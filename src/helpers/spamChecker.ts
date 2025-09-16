@@ -1,6 +1,12 @@
 import { getEmailCredentials, logEmailResponse } from "./database";
 import Logger from "../logger";
 import { ImapFlow } from "imapflow";
+import {
+  isEmailBlocked,
+  markAuthenticationFailure,
+  isEmailInCooldownList,
+  addToWarmupCooldownList,
+} from "./redis";
 
 interface ProviderConfig {
   host: string;
@@ -96,14 +102,11 @@ async function checkEmailInSpam(
         seen: false,
       });
 
-      if (!searchResult) {
-        Logger.info(
-          `[CheckSpam] Search returned null or undefined for subject: ${email.subject}`
-        );
-        return false; // Email not in spam
-      }
-
-      if (searchResult.length === 0) {
+      if (
+        !searchResult ||
+        !Array.isArray(searchResult) ||
+        searchResult.length === 0
+      ) {
         Logger.info(
           `[CheckSpam] No emails found in ${spamFolder} matching subject: ${email.subject}`
         );
@@ -171,17 +174,50 @@ async function checkEmailInSpam(
       await lock.release();
     }
   } catch (err) {
-    Logger.criticalError(
-      "[SpamCheck] Error while connecting to the IMAP server.",
-      {
-        action: "Connection Error",
-        emailSubject: email.subject,
-        error: err,
-        provider: provider,
-        spamFolder: spamFolder,
-      },
-      ["Check credentials", "Ensure IMAP settings are correct"]
-    );
+    // Check if this is an authentication error
+    const errorMessage = err?.toString().toLowerCase() || "";
+    const isAuthError =
+      errorMessage.includes("authentication") ||
+      errorMessage.includes("invalid credentials") ||
+      errorMessage.includes("login failed") ||
+      errorMessage.includes("auth") ||
+      errorMessage.includes("535") || // SMTP auth error
+      errorMessage.includes("534") || // SMTP auth error
+      (errorMessage.includes("no") && errorMessage.includes("authenticate")); // IMAP auth error
+
+    if (isAuthError) {
+      Logger.criticalError(
+        "[SpamCheck] IMAP Authentication failure detected, adding to cooldown list:",
+        {
+          action: "IMAP Authentication Error",
+          error: err,
+          provider: provider,
+          user: credentials.user,
+          emailSubject: email.subject,
+        },
+        [
+          "Email will be added to cooldown list for 2 days to prevent brute force attacks",
+        ]
+      );
+
+      // Add email to cooldown list for 2 days
+      await addToWarmupCooldownList(credentials.user);
+
+      // Also mark for short-term blocking (8 hours)
+      await markAuthenticationFailure(credentials.user);
+    } else {
+      Logger.criticalError(
+        "[SpamCheck] Error while connecting to the IMAP server.",
+        {
+          action: "Connection Error",
+          emailSubject: email.subject,
+          error: err,
+          provider: provider,
+          spamFolder: spamFolder,
+        },
+        ["Check credentials", "Ensure IMAP settings are correct"]
+      );
+    }
 
     inSpam = false; // Default to false in case of connection error
   } finally {
@@ -206,10 +242,37 @@ export async function CheckAndUpdateSpamInDb(
   replyEmail: string | undefined,
   warmupId: string,
   emailTo: string
-) {
+): Promise<{ shouldContinue: boolean; reason?: string }> {
   try {
     if (!customId || !replyEmail) {
-      return;
+      return {
+        shouldContinue: false,
+        reason: "Missing customId or replyEmail",
+      };
+    }
+
+    // Check if email is in cooldown list (2-day cooldown)
+    const isInCooldown = await isEmailInCooldownList(replyEmail);
+    if (isInCooldown) {
+      Logger.info(
+        `[CheckAndUpdateSpamInDb] Email ${replyEmail} is in cooldown list (2-day). Skipping.`
+      );
+      return {
+        shouldContinue: false,
+        reason: "Email in cooldown list - authentication failure within 2 days",
+      };
+    }
+
+    // Check if email is blocked due to recent authentication failure (8-hour)
+    const isBlocked = await isEmailBlocked(replyEmail);
+    if (isBlocked) {
+      Logger.info(
+        `[CheckAndUpdateSpamInDb] Email ${replyEmail} is blocked due to recent authentication failure. Skipping.`
+      );
+      return {
+        shouldContinue: false,
+        reason: "Email blocked due to authentication failure",
+      };
     }
 
     const emailCredentials = await getEmailCredentials(replyEmail);
@@ -219,7 +282,7 @@ export async function CheckAndUpdateSpamInDb(
       Logger.error("[CheckAndUpdateSpamInDb] Email Credentials not found", {
         email: replyEmail,
       });
-      return;
+      return { shouldContinue: false, reason: "Email credentials not found" };
     }
 
     const { emailId: user, password: pass, service } = emailCredentials;
@@ -237,7 +300,46 @@ export async function CheckAndUpdateSpamInDb(
     } else {
       Logger.info(`[CheckAndUpdateSpamInDb] Email is Not in Spam`);
     }
+
+    return { shouldContinue: true };
   } catch (error) {
+    // Check if this is an authentication error
+    const errorMessage = error?.toString().toLowerCase() || "";
+    const isAuthError =
+      errorMessage.includes("authentication") ||
+      errorMessage.includes("invalid credentials") ||
+      errorMessage.includes("login failed") ||
+      errorMessage.includes("auth") ||
+      errorMessage.includes("535") || // SMTP auth error
+      errorMessage.includes("534"); // SMTP auth error
+
+    if (isAuthError && replyEmail) {
+      Logger.criticalError(
+        "[SpamCheck] Authentication failure detected, adding to cooldown list:",
+        {
+          action: "Authentication Error",
+          error,
+          email: replyEmail,
+          customId,
+          emailTo,
+        },
+        [
+          "Email will be added to cooldown list for 2 days to prevent brute force attacks",
+        ]
+      );
+
+      // Add email to cooldown list for 2 days
+      await addToWarmupCooldownList(replyEmail);
+
+      // Also mark for short-term blocking (8 hours)
+      await markAuthenticationFailure(replyEmail);
+
+      return {
+        shouldContinue: false,
+        reason: "Authentication failure - email added to cooldown list",
+      };
+    }
+
     Logger.criticalError(
       "[SpamCheck] Error checking email:",
       {
@@ -249,5 +351,7 @@ export async function CheckAndUpdateSpamInDb(
       },
       ["Something Uncaught Error Happened While Checking Email"]
     );
+
+    return { shouldContinue: false, reason: "General error occurred" };
   }
 }

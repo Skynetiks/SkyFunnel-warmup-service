@@ -2,6 +2,13 @@ import nodemailer, { Transporter } from "nodemailer";
 import Mail from "nodemailer/lib/mailer/index";
 import { getEmailCredentials } from "./database";
 import net from "net";
+import {
+  isEmailBlocked,
+  markAuthenticationFailure,
+  isEmailInCooldownList,
+  addToWarmupCooldownList,
+} from "./redis";
+import Logger from "../logger";
 
 // Test network connectivity to Gmail SMTP
 async function testGmailConnectivity(): Promise<{
@@ -71,73 +78,11 @@ export const getNodemailerTransport = async (
         user: config.emailId,
         pass: config.password,
       },
-      // Add timeout settings to prevent hanging
-      connectionTimeout: 30000, // 30 seconds
-      greetingTimeout: 15000, // 15 seconds
-      socketTimeout: 30000, // 30 seconds
-      // Add debug logging
-      // debug: true,
-      // logger: true,
-      // Add TLS options
-      tls: {
-        rejectUnauthorized: false,
-        ciphers: "SSLv3",
-      },
+      debug: false, // Disable verbose SMTP debug logs
+      logger: false, // Disable nodemailer's built-in logger
     });
+    return transport;
 
-    console.log(
-      `[GetNodemailerTransport] Transport created for ${replyFrom} using service: ${config.service}`
-    );
-    console.log(
-      `[GetNodemailerTransport] Email: ${config.emailId}, Password length: ${config.password.length}`
-    );
-
-    // Check if password has spaces (Gmail app passwords shouldn't have spaces)
-    if (config.password.includes(" ")) {
-      console.warn(
-        `[GetNodemailerTransport] WARNING: Password contains spaces for ${replyFrom}. Gmail app passwords should not have spaces.`
-      );
-    }
-
-    // Test network connectivity before returning transport
-    console.log(
-      "[GetNodemailerTransport] Testing network connectivity to Gmail SMTP..."
-    );
-    const connectivity = await testGmailConnectivity();
-
-    if (!connectivity.port587 && !connectivity.port465) {
-      console.error(
-        "[GetNodemailerTransport] Network connectivity test failed - Gmail SMTP is not reachable on either port 587 or 465"
-      );
-      return null;
-    }
-
-    // Use the available port
-    if (connectivity.port465) {
-      console.log(
-        "[GetNodemailerTransport] Using port 465 (SSL) for Gmail SMTP"
-      );
-      const sslTransport = nodemailer.createTransport({
-        host: "smtp.gmail.com",
-        port: 465,
-        secure: true, // true for 465, false for other ports
-        auth: {
-          user: config.emailId,
-          pass: config.password,
-        },
-        connectionTimeout: 30000,
-        greetingTimeout: 15000,
-        socketTimeout: 30000,
-        debug: true,
-        logger: true,
-      });
-      return sslTransport;
-    } else {
-      console.log(
-        "[GetNodemailerTransport] Using port 587 (STARTTLS) for Gmail SMTP"
-      );
-      return transport;
-    }
   } catch (error) {
     console.error(
       `[GetNodemailerTransport] Error creating transport for ${replyFrom}:`,
@@ -162,6 +107,25 @@ export async function sendEmail(
   referenceId: string,
   replyFrom: string
 ): Promise<boolean> {
+  
+  // Check if email is in cooldown list (2-day cooldown)
+  const isInCooldown = await isEmailInCooldownList(replyFrom);
+  if (isInCooldown) {
+    Logger.info(
+      `[SendEmail] Email ${replyFrom} is in cooldown list (2-day). Skipping send to ${to}.`
+    );
+    return false;
+  }
+
+  // Check if email is blocked due to recent authentication failure (8-hour)
+  const isBlocked = await isEmailBlocked(replyFrom);
+  if (isBlocked) {
+    Logger.info(
+      `[SendEmail] Email ${replyFrom} is blocked due to recent authentication failure. Skipping send to ${to}.`
+    );
+    return false;
+  }
+
   const maxRetries = 2;
   let lastError: any;
 
@@ -198,6 +162,41 @@ export async function sendEmail(
       return true;
     } catch (error) {
       lastError = error;
+
+      // Check if this is an authentication error
+      const errorMessage = error?.toString().toLowerCase() || "";
+      const isAuthError =
+        errorMessage.includes("authentication") ||
+        errorMessage.includes("invalid credentials") ||
+        errorMessage.includes("login failed") ||
+        errorMessage.includes("auth") ||
+        errorMessage.includes("535") || // SMTP auth error
+        errorMessage.includes("534"); // SMTP auth error
+
+      if (isAuthError) {
+        Logger.criticalError(
+          "[SendEmail] Authentication failure detected, adding to cooldown list:",
+          {
+            action: "Authentication Error",
+            error,
+            replyFrom,
+            to,
+            attempt,
+          },
+          [
+            "Email will be added to cooldown list for 2 days to prevent brute force attacks",
+          ]
+        );
+
+        // Add email to cooldown list for 2 days
+        await addToWarmupCooldownList(replyFrom);
+
+        // Also mark for short-term blocking (8 hours)
+        await markAuthenticationFailure(replyFrom);
+
+        return false; // Stop retrying on auth error
+      }
+
       console.error(
         `[SendEmail] Attempt ${attempt}/${maxRetries} failed for ${to}:`,
         error
