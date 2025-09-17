@@ -2,12 +2,6 @@ import nodemailer, { Transporter } from "nodemailer";
 import Mail from "nodemailer/lib/mailer/index";
 import { getEmailCredentials } from "./database";
 import net from "net";
-import {
-  isEmailBlocked,
-  markAuthenticationFailure,
-  isEmailInCooldownList,
-  addToWarmupCooldownList,
-} from "./redis";
 import Logger from "../logger";
 
 // Test network connectivity to Gmail SMTP
@@ -82,7 +76,6 @@ export const getNodemailerTransport = async (
       logger: false, // Disable nodemailer's built-in logger
     });
     return transport;
-
   } catch (error) {
     console.error(
       `[GetNodemailerTransport] Error creating transport for ${replyFrom}:`,
@@ -107,25 +100,6 @@ export async function sendEmail(
   referenceId: string,
   replyFrom: string
 ): Promise<boolean> {
-  
-  // Check if email is in cooldown list (2-day cooldown)
-  const isInCooldown = await isEmailInCooldownList(replyFrom);
-  if (isInCooldown) {
-    Logger.info(
-      `[SendEmail] Email ${replyFrom} is in cooldown list (2-day). Skipping send to ${to}.`
-    );
-    return false;
-  }
-
-  // Check if email is blocked due to recent authentication failure (8-hour)
-  const isBlocked = await isEmailBlocked(replyFrom);
-  if (isBlocked) {
-    Logger.info(
-      `[SendEmail] Email ${replyFrom} is blocked due to recent authentication failure. Skipping send to ${to}.`
-    );
-    return false;
-  }
-
   const maxRetries = 2;
   let lastError: any;
 
@@ -175,7 +149,7 @@ export async function sendEmail(
 
       if (isAuthError) {
         Logger.criticalError(
-          "[SendEmail] Authentication failure detected, adding to cooldown list:",
+          "[SendEmail] Authentication failure detected:",
           {
             action: "Authentication Error",
             error,
@@ -183,16 +157,8 @@ export async function sendEmail(
             to,
             attempt,
           },
-          [
-            "Email will be added to cooldown list for 2 days to prevent brute force attacks",
-          ]
+          ["Authentication failed - stopping retry attempts"]
         );
-
-        // Add email to cooldown list for 2 days
-        await addToWarmupCooldownList(replyFrom);
-
-        // Also mark for short-term blocking (8 hours)
-        await markAuthenticationFailure(replyFrom);
 
         return false; // Stop retrying on auth error
       }

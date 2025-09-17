@@ -17,8 +17,6 @@ import {
   addEmailToBatch,
   getCurrentHourBatch,
   removeEmailsFromBatch,
-  isEmailBlocked,
-  isEmailInCooldownList,
 } from "./helpers/redis";
 
 const EmailSchema = z.object({
@@ -114,37 +112,6 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
       to,
     });
 
-    // Check if the replyFrom email is in cooldown list (2-day cooldown)
-    const isInCooldown = await isEmailInCooldownList(replyFrom);
-    if (isInCooldown) {
-      // If this is the fourth time we've processed this message and it's still in cooldown, delete it
-      if (receiveCount >= 4) {
-        Logger.info(
-          `[AddMessageToBatch] Email ${replyFrom} is in cooldown list and message has been processed ${receiveCount} times. Deleting message permanently.`
-        );
-        await deleteMessageFromQueue(message.ReceiptHandle);
-        return;
-      }
-
-      Logger.info(
-        `[AddMessageToBatch] Email ${replyFrom} is in cooldown list (attempt ${receiveCount}). Hiding message for 12 hours.`
-      );
-
-      // Hide the message for 12 hours (max SQS visibility timeout)
-      await hideMessageFor12Hours(message.ReceiptHandle);
-      return;
-    }
-
-    // Check if the replyFrom email is blocked (8-hour block)
-    const isBlocked = await isEmailBlocked(replyFrom);
-    if (isBlocked) {
-      Logger.info(
-        `[AddMessageToBatch] Email ${replyFrom} is blocked. Deleting message and skipping.`
-      );
-      await deleteMessageFromQueue(message.ReceiptHandle);
-      return;
-    }
-
     // Add message to the current hour batch
     const messageData = {
       to,
@@ -162,8 +129,14 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
       receiveCount: receiveCount,
     };
 
-    await addEmailToBatch(replyFrom, messageData);
-    Logger.info("[AddMessageToBatch] Message added to batch successfully");
+    const batchAdded = await addEmailToBatch(replyFrom, messageData);
+    if (batchAdded) {
+      Logger.info("[AddMessageToBatch] Message added to batch successfully");
+      // Delete message from SQS immediately after successful batch addition
+      await deleteMessageFromQueue(message.ReceiptHandle);
+    } else {
+      Logger.error("[AddMessageToBatch] Failed to add message to batch");
+    }
   } catch (error) {
     Logger.criticalError(
       "[AddMessageToBatch] Error processing message:",
@@ -203,20 +176,6 @@ async function processBatchedEmails(): Promise<void> {
           `[ProcessBatchedEmails] Processing batched email: ${replyFromEmail} with 1 message (deduplication ensures only one message per email per hour)`
         );
 
-        // Check if email is still blocked (might have been blocked after adding to batch)
-        const isBlocked = await isEmailBlocked(replyFromEmail);
-        if (isBlocked) {
-          Logger.info(
-            `[ProcessBatchedEmails] Email ${replyFromEmail} is blocked. Skipping and cleaning up 1 message.`
-          );
-
-          // Delete the message for this blocked email
-          const messageData = messagesArray[0];
-          await deleteMessageFromQueue(messageData.receiptHandle);
-          processedEmails.push(replyFromEmail);
-          continue;
-        }
-
         // Process spam check for this email (only once per hour per email)
         // Use the first message for spam check (since we only need to check once per email per hour)
         const firstMessage = messagesArray[0];
@@ -232,11 +191,8 @@ async function processBatchedEmails(): Promise<void> {
             `[ProcessBatchedEmails] Spam check failed for ${replyFromEmail}: ${spamCheckResult.reason}`
           );
 
-          // If it's an auth failure, the email is now blocked, so delete all messages
-          if (
-            spamCheckResult.reason?.includes("authentication failure") ||
-            spamCheckResult.reason?.includes("cooldown list")
-          ) {
+          // If it's an auth failure, skip processing
+          if (spamCheckResult.reason?.includes("authentication failure")) {
             Logger.info(
               `[ProcessBatchedEmails] Authentication failure detected for ${replyFromEmail}. Processing 1 message.`
             );
@@ -244,17 +200,10 @@ async function processBatchedEmails(): Promise<void> {
             const messageData = messagesArray[0];
             const receiveCount = messageData.receiveCount || 1;
 
-            if (receiveCount >= 4) {
-              Logger.info(
-                `[ProcessBatchedEmails] Message for ${replyFromEmail} has been processed ${receiveCount} times and still failing. Deleting permanently.`
-              );
-              await deleteMessageFromQueue(messageData.receiptHandle);
-            } else {
-              Logger.info(
-                `[ProcessBatchedEmails] Hiding message for ${replyFromEmail} for 12 hours (attempt ${receiveCount}).`
-              );
-              await hideMessageFor12Hours(messageData.receiptHandle);
-            }
+            // Message already deleted from SQS when added to batch
+            Logger.info(
+              `[ProcessBatchedEmails] Message for ${replyFromEmail} processed ${receiveCount} times and still failing. Already deleted from SQS.`
+            );
             processedEmails.push(replyFromEmail);
           }
           continue;
@@ -285,19 +234,18 @@ async function processBatchedEmails(): Promise<void> {
                   messageData.to,
                   "REPLIED"
                 );
-                await deleteMessageFromQueue(messageData.receiptHandle);
+                // Message already deleted from SQS when added to batch
                 successfullyProcessedMessages.push(messageData.receiptHandle);
                 successfulMessages++;
               } else {
                 Logger.error(
                   `[ProcessBatchedEmails] Failed to send email to ${messageData.to} from ${replyFromEmail}`
                 );
-                // If this fails due to auth error, the email will be blocked and future messages will be skipped
+                // If this fails due to auth error, future messages will be skipped
                 // Message will be retried in next cycle if not an auth error
               }
             } else {
-              // Just delete the message if no reply is needed
-              await deleteMessageFromQueue(messageData.receiptHandle);
+              // Message already deleted from SQS when added to batch
               successfullyProcessedMessages.push(messageData.receiptHandle);
               successfulMessages++;
             }

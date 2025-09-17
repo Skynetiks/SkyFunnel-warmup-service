@@ -1,12 +1,6 @@
 import { getEmailCredentials, logEmailResponse } from "./database";
 import Logger from "../logger";
 import { ImapFlow } from "imapflow";
-import {
-  isEmailBlocked,
-  markAuthenticationFailure,
-  isEmailInCooldownList,
-  addToWarmupCooldownList,
-} from "./redis";
 
 interface ProviderConfig {
   host: string;
@@ -187,7 +181,7 @@ async function checkEmailInSpam(
 
     if (isAuthError) {
       Logger.criticalError(
-        "[SpamCheck] IMAP Authentication failure detected, adding to cooldown list:",
+        "[SpamCheck] IMAP Authentication failure detected:",
         {
           action: "IMAP Authentication Error",
           error: err,
@@ -195,16 +189,8 @@ async function checkEmailInSpam(
           user: credentials.user,
           emailSubject: email.subject,
         },
-        [
-          "Email will be added to cooldown list for 2 days to prevent brute force attacks",
-        ]
+        ["IMAP authentication failed"]
       );
-
-      // Add email to cooldown list for 2 days
-      await addToWarmupCooldownList(credentials.user);
-
-      // Also mark for short-term blocking (8 hours)
-      await markAuthenticationFailure(credentials.user);
     } else {
       Logger.criticalError(
         "[SpamCheck] Error while connecting to the IMAP server.",
@@ -251,30 +237,6 @@ export async function CheckAndUpdateSpamInDb(
       };
     }
 
-    // Check if email is in cooldown list (2-day cooldown)
-    const isInCooldown = await isEmailInCooldownList(replyEmail);
-    if (isInCooldown) {
-      Logger.info(
-        `[CheckAndUpdateSpamInDb] Email ${replyEmail} is in cooldown list (2-day). Skipping.`
-      );
-      return {
-        shouldContinue: false,
-        reason: "Email in cooldown list - authentication failure within 2 days",
-      };
-    }
-
-    // Check if email is blocked due to recent authentication failure (8-hour)
-    const isBlocked = await isEmailBlocked(replyEmail);
-    if (isBlocked) {
-      Logger.info(
-        `[CheckAndUpdateSpamInDb] Email ${replyEmail} is blocked due to recent authentication failure. Skipping.`
-      );
-      return {
-        shouldContinue: false,
-        reason: "Email blocked due to authentication failure",
-      };
-    }
-
     const emailCredentials = await getEmailCredentials(replyEmail);
 
     // Finding the correct configuration for the reply email to use is to fetch spam folder
@@ -315,7 +277,7 @@ export async function CheckAndUpdateSpamInDb(
 
     if (isAuthError && replyEmail) {
       Logger.criticalError(
-        "[SpamCheck] Authentication failure detected, adding to cooldown list:",
+        "[SpamCheck] Authentication failure detected:",
         {
           action: "Authentication Error",
           error,
@@ -323,20 +285,12 @@ export async function CheckAndUpdateSpamInDb(
           customId,
           emailTo,
         },
-        [
-          "Email will be added to cooldown list for 2 days to prevent brute force attacks",
-        ]
+        ["Authentication failed"]
       );
-
-      // Add email to cooldown list for 2 days
-      await addToWarmupCooldownList(replyEmail);
-
-      // Also mark for short-term blocking (8 hours)
-      await markAuthenticationFailure(replyEmail);
 
       return {
         shouldContinue: false,
-        reason: "Authentication failure - email added to cooldown list",
+        reason: "Authentication failure",
       };
     }
 
