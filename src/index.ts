@@ -401,5 +401,5 @@ console.log("🔄 Batch Processing: Every hour");
 console.log("🛡️  Authentication failure protection: 2 Days");
 
 // Start both processes
-// collectMessagesAndScheduleNext(); // Collect messages frequently
+collectMessagesAndScheduleNext(); // Collect messages frequently
 processBatchAndScheduleNext(); // Process batches hourly
