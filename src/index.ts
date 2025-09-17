@@ -82,35 +82,9 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
       replyFrom,
       customMailId,
       shouldReply,
-      scheduledFor,
     } = EmailSchema.parse(email);
 
-    // Check if this message is scheduled for the future
-    if (scheduledFor && scheduledFor > Date.now()) {
-      Logger.info(
-        `[AddMessageToBatch] Message scheduled for future (${new Date(
-          scheduledFor
-        ).toISOString()}). Re-queuing with delay.`
-      );
-
-      // Calculate delay in seconds (max 15 minutes for SQS)
-      const delaySeconds = Math.min(
-        Math.floor((scheduledFor - Date.now()) / 1000),
-        900
-      );
-
-      // Delay the message
-      const success = await delayMessageInQueue(message.Body, delaySeconds);
-      if (success) {
-        await deleteMessageFromQueue(message.ReceiptHandle);
-      }
-      return;
-    }
-
-    Logger.info("[AddMessageToBatch] Adding message to batch for email: ", {
-      replyFrom,
-      to,
-    });
+    Logger.info(`[AddMessageToBatch] Adding message to batch for email: ${to} to be replied by ${replyFrom}`, );
 
     // Add message to the current hour batch
     const messageData = {
