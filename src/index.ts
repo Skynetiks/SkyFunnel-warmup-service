@@ -164,7 +164,6 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
 
     await addEmailToBatch(replyFrom, messageData);
     Logger.info("[AddMessageToBatch] Message added to batch successfully");
-
   } catch (error) {
     Logger.criticalError(
       "[AddMessageToBatch] Error processing message:",
@@ -201,20 +200,19 @@ async function processBatchedEmails(): Promise<void> {
     for (const [replyFromEmail, messagesArray] of Object.entries(batch)) {
       try {
         Logger.info(
-          `[ProcessBatchedEmails] Processing batched email: ${replyFromEmail} with ${messagesArray.length} message(s)`
+          `[ProcessBatchedEmails] Processing batched email: ${replyFromEmail} with 1 message (deduplication ensures only one message per email per hour)`
         );
 
         // Check if email is still blocked (might have been blocked after adding to batch)
         const isBlocked = await isEmailBlocked(replyFromEmail);
         if (isBlocked) {
           Logger.info(
-            `[ProcessBatchedEmails] Email ${replyFromEmail} is blocked. Skipping and cleaning up ${messagesArray.length} message(s).`
+            `[ProcessBatchedEmails] Email ${replyFromEmail} is blocked. Skipping and cleaning up 1 message.`
           );
 
-          // Delete all messages for this blocked email
-          for (const messageData of messagesArray) {
-            await deleteMessageFromQueue(messageData.receiptHandle);
-          }
+          // Delete the message for this blocked email
+          const messageData = messagesArray[0];
+          await deleteMessageFromQueue(messageData.receiptHandle);
           processedEmails.push(replyFromEmail);
           continue;
         }
@@ -240,23 +238,22 @@ async function processBatchedEmails(): Promise<void> {
             spamCheckResult.reason?.includes("cooldown list")
           ) {
             Logger.info(
-              `[ProcessBatchedEmails] Authentication failure detected for ${replyFromEmail}. Processing ${messagesArray.length} message(s).`
+              `[ProcessBatchedEmails] Authentication failure detected for ${replyFromEmail}. Processing 1 message.`
             );
 
-            for (const messageData of messagesArray) {
-              const receiveCount = messageData.receiveCount || 1;
+            const messageData = messagesArray[0];
+            const receiveCount = messageData.receiveCount || 1;
 
-              if (receiveCount >= 4) {
-                Logger.info(
-                  `[ProcessBatchedEmails] Message for ${replyFromEmail} has been processed ${receiveCount} times and still failing. Deleting permanently.`
-                );
-                await deleteMessageFromQueue(messageData.receiptHandle);
-              } else {
-                Logger.info(
-                  `[ProcessBatchedEmails] Hiding message for ${replyFromEmail} for 12 hours (attempt ${receiveCount}).`
-                );
-                await hideMessageFor12Hours(messageData.receiptHandle);
-              }
+            if (receiveCount >= 4) {
+              Logger.info(
+                `[ProcessBatchedEmails] Message for ${replyFromEmail} has been processed ${receiveCount} times and still failing. Deleting permanently.`
+              );
+              await deleteMessageFromQueue(messageData.receiptHandle);
+            } else {
+              Logger.info(
+                `[ProcessBatchedEmails] Hiding message for ${replyFromEmail} for 12 hours (attempt ${receiveCount}).`
+              );
+              await hideMessageFor12Hours(messageData.receiptHandle);
             }
             processedEmails.push(replyFromEmail);
           }
@@ -365,7 +362,6 @@ async function handleMessages(): Promise<void> {
       const promise = addMessageToBatch(message);
       promiseArray.push(promise);
     } catch (error) {
-      
       // Got an unexpected error, log it and continue
       Logger.criticalError(
         "[HandleMessages] Error Processing a Message with a Receipt Handle:",

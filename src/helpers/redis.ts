@@ -113,7 +113,7 @@ export async function removeAuthenticationFailure(
  * Add email to processing batch for the current hour
  */
 export async function addEmailToBatch(
-  email: string,
+  replyFromEmail: string,
   messageData: any
 ): Promise<boolean> {
   const currentHour = Math.floor(Date.now() / (1000 * 60 * 60)); // Current hour timestamp
@@ -126,26 +126,22 @@ export async function addEmailToBatch(
   }
 
   try {
-    // Get existing messages for this email, if any
-    const existingData = await redis.hget(key, email);
-    let messages = [];
+    // Create a unique key combining replyFrom and to emails
+    const uniqueKey = `${replyFromEmail}->${messageData.to}`;
+
+    // Get existing messages for this unique combination, if any
+    const existingData = await redis.hget(key, uniqueKey);
 
     if (existingData) {
-      try {
-        const parsed = JSON.parse(existingData);
-        // If it's already an array, use it; if it's a single message, convert to array
-        messages = Array.isArray(parsed) ? parsed : [parsed];
-      } catch (parseError) {
-        console.error("Error parsing existing batch data:", parseError);
-        messages = [];
-      }
+      // If a message already exists for this replyFrom->to combination in this hour, skip adding the duplicate
+      console.log(
+        `[AddEmailToBatch] Skipping duplicate message for ${uniqueKey} - already exists in current hour batch`
+      );
+      return true; // Return true to indicate "success" (message handled, just skipped)
     }
 
-    // Add the new message to the array
-    messages.push(messageData);
-
-    // Store the updated array
-    await redis.hset(key, email, JSON.stringify(messages));
+    // No existing message, add the new message with the unique key
+    await redis.hset(key, uniqueKey, JSON.stringify(messageData));
     await redis.expire(key, 2 * ONE_HOUR_IN_SECONDS);
     return true;
   } catch (error) {
@@ -173,18 +169,28 @@ export async function getCurrentHourBatch(): Promise<{
     const batch = await redis.hgetall(key);
     const result: { [email: string]: any[] } = {};
 
-    for (const [email, messageDataStr] of Object.entries(batch)) {
+    for (const [uniqueKey, messageDataStr] of Object.entries(batch)) {
       try {
         const parsed = JSON.parse(messageDataStr);
-        // Ensure we always return an array
-        result[email] = Array.isArray(parsed) ? parsed : [parsed];
+        // Extract replyFrom email from the unique key (format: "replyFrom->to")
+        const replyFromEmail = uniqueKey.split("->")[0];
+
+        // Group messages by replyFrom email
+        if (!result[replyFromEmail]) {
+          result[replyFromEmail] = [];
+        }
+        result[replyFromEmail].push(parsed);
       } catch (parseError) {
         console.error(
-          "Error parsing message data for email:",
-          email,
+          "Error parsing message data for unique key:",
+          uniqueKey,
           parseError
         );
-        result[email] = [];
+        // Still try to extract replyFrom email for error logging
+        const replyFromEmail = uniqueKey.split("->")[0];
+        if (!result[replyFromEmail]) {
+          result[replyFromEmail] = [];
+        }
       }
     }
 
@@ -199,7 +205,7 @@ export async function getCurrentHourBatch(): Promise<{
  * Remove processed emails from the current hour batch
  */
 export async function removeEmailsFromBatch(
-  emails: string[]
+  replyFromEmails: string[]
 ): Promise<boolean> {
   const currentHour = Math.floor(Date.now() / (1000 * 60 * 60));
   const key = `${EMAIL_BATCH_PREFIX}${currentHour}`;
@@ -211,8 +217,19 @@ export async function removeEmailsFromBatch(
   }
 
   try {
-    if (emails.length > 0) {
-      await redis.hdel(key, ...emails);
+    if (replyFromEmails.length > 0) {
+      // Get all keys in the batch
+      const allKeys = await redis.hkeys(key);
+
+      // Find keys that start with any of the replyFrom emails
+      const keysToDelete = allKeys.filter((uniqueKey) => {
+        const replyFromEmail = uniqueKey.split("->")[0];
+        return replyFromEmails.includes(replyFromEmail);
+      });
+
+      if (keysToDelete.length > 0) {
+        await redis.hdel(key, ...keysToDelete);
+      }
     }
     return true;
   } catch (error) {
