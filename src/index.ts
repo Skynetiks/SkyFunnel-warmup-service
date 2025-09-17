@@ -117,8 +117,8 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
     // Check if the replyFrom email is in cooldown list (2-day cooldown)
     const isInCooldown = await isEmailInCooldownList(replyFrom);
     if (isInCooldown) {
-      // If this is the second time we've processed this message and it's still in cooldown, delete it
-      if (receiveCount >= 2) {
+      // If this is the fourth time we've processed this message and it's still in cooldown, delete it
+      if (receiveCount >= 4) {
         Logger.info(
           `[AddMessageToBatch] Email ${replyFrom} is in cooldown list and message has been processed ${receiveCount} times. Deleting message permanently.`
         );
@@ -246,7 +246,7 @@ async function processBatchedEmails(): Promise<void> {
             for (const messageData of messagesArray) {
               const receiveCount = messageData.receiveCount || 1;
 
-              if (receiveCount >= 2) {
+              if (receiveCount >= 4) {
                 Logger.info(
                   `[ProcessBatchedEmails] Message for ${replyFromEmail} has been processed ${receiveCount} times and still failing. Deleting permanently.`
                 );
