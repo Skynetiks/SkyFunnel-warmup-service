@@ -48,8 +48,8 @@ process.on("uncaughtException", function (err) {
 
 async function addMessageToBatch(message: SQSMessage): Promise<void> {
   let email = "";
-  const receiveCount = getMessageReceiveCount(message);
 
+  const receiveCount = getMessageReceiveCount(message);
   try {
     email = JSON.parse(message.Body);
   } catch (jsonError) {
@@ -164,18 +164,21 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
 
     await addEmailToBatch(replyFrom, messageData);
     Logger.info("[AddMessageToBatch] Message added to batch successfully");
+
   } catch (error) {
     Logger.criticalError(
       "[AddMessageToBatch] Error processing message:",
       {
         action: "Adding Message to Batch",
         error,
+        receiptHandle: message.ReceiptHandle,
       },
       [
         "Something Went Wrong While Adding Message to Batch",
         "Make sure message is correct",
       ]
     );
+    // Don't delete message on error - let it retry
   }
 }
 
@@ -362,6 +365,8 @@ async function handleMessages(): Promise<void> {
       const promise = addMessageToBatch(message);
       promiseArray.push(promise);
     } catch (error) {
+      
+      // Got an unexpected error, log it and continue
       Logger.criticalError(
         "[HandleMessages] Error Processing a Message with a Receipt Handle:",
         {

@@ -82,6 +82,7 @@ export const getNodemailerTransport = async (
       logger: false, // Disable nodemailer's built-in logger
     });
     return transport;
+
   } catch (error) {
     console.error(
       `[GetNodemailerTransport] Error creating transport for ${replyFrom}:`,
@@ -106,6 +107,7 @@ export async function sendEmail(
   referenceId: string,
   replyFrom: string
 ): Promise<boolean> {
+  
   // Check if email is in cooldown list (2-day cooldown)
   const isInCooldown = await isEmailInCooldownList(replyFrom);
   if (isInCooldown) {
