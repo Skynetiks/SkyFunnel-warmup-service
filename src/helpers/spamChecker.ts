@@ -104,6 +104,8 @@ async function checkEmailInSpam(
         Logger.info(
           `[CheckSpam] No emails found in ${spamFolder} matching subject: ${email.subject}`
         );
+        // Mark emails as read even when not in spam
+        await markAllEmailAsRead(client);
         return false; // Email not in spam
       }
 
