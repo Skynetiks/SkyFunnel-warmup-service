@@ -105,12 +105,23 @@ export async function sendEmail(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
+      // Build references header properly for threading
+      let references = "";
+      if (referenceId && inReplyTo) {
+        // If we have both referenceId and inReplyTo, combine them
+        references = `${referenceId} ${inReplyTo}`;
+      } else if (referenceId) {
+        references = referenceId;
+      } else if (inReplyTo) {
+        references = inReplyTo;
+      }
+
       const mailOptions = {
         from: replyFrom,
         to,
-        subject: `${subject}`,
+        subject: `Re: ${subject}`,
         text: body,
-        references: [referenceId],
+        references: references,
         inReplyTo: inReplyTo,
       } satisfies Mail.Options;
 
