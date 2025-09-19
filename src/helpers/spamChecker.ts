@@ -7,6 +7,7 @@ interface ProviderConfig {
   port: number;
   secure: boolean;
   spamFolder: string;
+  inboxFolder: string;
 }
 
 interface Email {
@@ -34,24 +35,71 @@ async function markAllEmailAsRead(client: ImapFlow): Promise<boolean> {
   }
 }
 
+// Move emails from spam to inbox
+async function moveEmailsFromSpamToInbox(
+  client: ImapFlow,
+  emailUids: number[],
+  spamFolder: string,
+  inboxFolder: string
+): Promise<boolean> {
+  try {
+    if (emailUids.length === 0) {
+      Logger.info("[MoveEmails] No emails to move");
+      return true;
+    }
+
+    Logger.info(
+      `[MoveEmails] Moving ${emailUids.length} email(s) from ${spamFolder} to ${inboxFolder}`
+    );
+
+    // Move emails from spam folder to inbox
+    await client.messageMove(emailUids, inboxFolder);
+
+    Logger.info(
+      `✅ Successfully moved ${emailUids.length} email(s) from spam to inbox`
+    );
+    return true;
+  } catch (error) {
+    Logger.criticalError(
+      "[MoveEmails] Failed to move emails from spam to inbox",
+      {
+        action: "Move Emails from Spam",
+        error: error,
+        emailCount: emailUids.length,
+        spamFolder: spamFolder,
+        inboxFolder: inboxFolder,
+      },
+      [
+        "Check IMAP permissions",
+        "Verify folder names",
+        "Ensure sufficient storage space",
+      ]
+    );
+    return false;
+  }
+}
+
 const providers: Record<string, ProviderConfig> = {
   gmail: {
     host: "imap.gmail.com",
     port: 993,
     secure: true,
     spamFolder: "[Gmail]/Spam",
+    inboxFolder: "INBOX",
   },
   outlook: {
     host: "outlook.office365.com",
     port: 993,
     secure: true,
     spamFolder: "Spam",
+    inboxFolder: "Inbox",
   },
   skyfunnel: {
     host: "box.skyfunnel.us",
     port: 993,
     secure: true,
     spamFolder: "SPAM",
+    inboxFolder: "INBOX",
   },
 };
 
@@ -74,7 +122,7 @@ async function checkEmailInSpam(
     return false;
   }
 
-  const { host, port, secure, spamFolder } = providerConfig;
+  const { host, port, secure, spamFolder, inboxFolder } = providerConfig;
   const client = new ImapFlow({
     host,
     port,
@@ -115,8 +163,11 @@ async function checkEmailInSpam(
         )}`
       );
       const results = await client.fetch(searchResult, { envelope: true });
-      // Loop through the results and check if the email subject matches
 
+      // Collect UIDs of emails that match the subject
+      const matchingEmailUids: number[] = [];
+
+      // Loop through the results and check if the email subject matches
       for await (const result of results) {
         if (
           result.envelope &&
@@ -127,13 +178,13 @@ async function checkEmailInSpam(
             `[CheckSpam] Email with subject "${email.subject}" found in spam.`
           );
           inSpam = true;
+          matchingEmailUids.push(result.uid);
           // NOTE: DO NOT EARLY BREAK OR RETURN HERE. IT WILL CAUSE DEAD LOOP
           // NOTE: DO NOT USE ANY IMAP COMMANDS HERE. IT WILL CAUSE DEAD LOOP
         } else {
           Logger.info(
             `[CheckSpam] Email with UID ${result.uid} does not match subject "${email.subject}".`
           );
-          inSpam = false;
         }
       }
 
@@ -143,8 +194,28 @@ async function checkEmailInSpam(
         );
       } else {
         Logger.info(
-          `[CheckSpam] Email with subject "${email.subject}" found in spam.`
+          `[CheckSpam] Email with subject "${email.subject}" found in spam. Moving to inbox...`
         );
+
+        // Move matching emails from spam to inbox
+        if (matchingEmailUids.length > 0) {
+          const moveSuccess = await moveEmailsFromSpamToInbox(
+            client,
+            matchingEmailUids,
+            spamFolder,
+            inboxFolder
+          );
+
+          if (moveSuccess) {
+            Logger.info(
+              `[CheckSpam] Successfully moved ${matchingEmailUids.length} email(s) from spam to inbox`
+            );
+          } else {
+            Logger.error(
+              `[CheckSpam] Failed to move emails from spam to inbox`
+            );
+          }
+        }
       }
 
       // Mark emails as read regardless of spam status

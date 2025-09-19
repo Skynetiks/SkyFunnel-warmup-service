@@ -105,7 +105,6 @@ export async function sendEmail(
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-
       const mailOptions = {
         from: replyFrom,
         to,
