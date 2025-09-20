@@ -67,6 +67,8 @@ type EmailCredentials = {
   emailId: string;
   service: "gmail";
   password: string;
+  accessToken?: string;
+  refreshToken?: string;
 };
 export async function getEmailCredentials(serviceEmailId: string) {
   const queryText = `SELECT * FROM "WarmupEmailServiceEmailCredential" WHERE "emailId" = $1`;
@@ -89,12 +91,158 @@ export async function getEmailCredentials(serviceEmailId: string) {
     );
     throw new Error("ENCRYPTION_SECRET is required");
   }
+
+  // Decrypt password
   const password = decryptToken(topMatch.password, secretKey);
-
-  console.log("Password for emailId:", serviceEmailId, password);
-
   topMatch.password = password;
+
+  // Decrypt Gmail OAuth tokens if they exist
+  if (topMatch.accessToken) {
+    try {
+      topMatch.accessToken = decryptToken(topMatch.accessToken, secretKey);
+      Logger.info(
+        `[GetEmailCredentials] Decrypted Gmail access token for ${serviceEmailId}`
+      );
+    } catch (error) {
+      Logger.error(
+        "[GetEmailCredentials] Failed to decrypt Gmail access token",
+        {
+          emailId: serviceEmailId,
+          error,
+        }
+      );
+      topMatch.accessToken = undefined;
+    }
+  }
+
+  if (topMatch.refreshToken) {
+    try {
+      topMatch.refreshToken = decryptToken(topMatch.refreshToken, secretKey);
+      Logger.info(
+        `[GetEmailCredentials] Decrypted Gmail refresh token for ${serviceEmailId}`
+      );
+    } catch (error) {
+      Logger.error(
+        "[GetEmailCredentials] Failed to decrypt Gmail refresh token",
+        {
+          emailId: serviceEmailId,
+          error,
+        }
+      );
+      topMatch.refreshToken = undefined;
+    }
+  }
+
+  console.log("Credentials for emailId:", serviceEmailId, {
+    emailId: topMatch.emailId,
+    service: topMatch.service,
+    hasPassword: !!topMatch.password,
+    hasAccessToken: !!topMatch.accessToken,
+    hasRefreshToken: !!topMatch.refreshToken,
+  });
+
   return topMatch;
+}
+
+/**
+ * Helper function to save Gmail OAuth tokens to the database
+ * @param emailId The email ID to update
+ * @param accessToken The access token (will be encrypted)
+ * @param refreshToken The refresh token (will be encrypted)
+ */
+export async function saveGmailOAuthTokens(
+  emailId: string,
+  accessToken: string,
+  refreshToken: string
+): Promise<void> {
+  try {
+    const secretKey = process.env.ENCRYPTION_SECRET;
+    if (!secretKey) {
+      throw new Error("ENCRYPTION_SECRET is required");
+    }
+
+    // Import encryption function
+    const { encryptToken } = await import("./encryption");
+
+    // Encrypt the tokens
+    const encryptedAccessToken = encryptToken(accessToken, secretKey);
+    const encryptedRefreshToken = encryptToken(refreshToken, secretKey);
+
+    const queryText = `
+      UPDATE "WarmupEmailServiceEmailCredential" 
+      SET "accessToken" = $1, "refreshToken" = $2
+      WHERE "emailId" = $3
+    `;
+    const values = [encryptedAccessToken, encryptedRefreshToken, emailId];
+
+    const result = await query(queryText, values);
+
+    if (result.rowCount === 0) {
+      throw new Error(`No email credential found for emailId: ${emailId}`);
+    }
+
+    Logger.info(
+      `[SaveGmailOAuthTokens] Successfully saved OAuth tokens for ${emailId}`
+    );
+  } catch (error) {
+    Logger.criticalError(
+      "[SaveGmailOAuthTokens] Error saving Gmail OAuth tokens",
+      {
+        action: "Save Gmail OAuth Tokens",
+        emailId: emailId,
+        error: error,
+      },
+      ["Check if emailId exists in database", "Verify encryption setup"]
+    );
+    throw error;
+  }
+}
+
+/**
+ * Helper function to update Gmail access token in the database
+ * @param emailId The email ID to update
+ * @param accessToken The new access token (will be encrypted)
+ */
+export async function updateGmailAccessToken(
+  emailId: string,
+  accessToken: string
+): Promise<void> {
+  try {
+    const secretKey = process.env.ENCRYPTION_SECRET;
+    if (!secretKey) {
+      throw new Error("ENCRYPTION_SECRET is required");
+    }
+
+    // Import encryption function
+    const { encryptToken } = await import("./encryption");
+
+    // Encrypt the token
+    const encryptedAccessToken = encryptToken(accessToken, secretKey);
+
+    const queryText = `
+      UPDATE "WarmupEmailServiceEmailCredential" 
+      SET "accessToken" = $1
+      WHERE "emailId" = $2
+    `;
+    const values = [encryptedAccessToken, emailId];
+
+    const result = await query(queryText, values);
+
+    if (result.rowCount === 0) {
+      throw new Error(`No email credential found for emailId: ${emailId}`);
+    }
+
+    Logger.info(
+      `[UpdateGmailAccessToken] Successfully updated access token for ${emailId}`
+    );
+  } catch (error) {
+    Logger.error("[UpdateGmailAccessToken] Error updating Gmail access token", {
+      action: "Update Gmail Access Token",
+      emailId: emailId,
+      error: error,
+    });
+    throw error;
+  }
 }
 
 type Issue = {

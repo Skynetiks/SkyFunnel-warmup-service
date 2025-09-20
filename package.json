@@ -7,7 +7,9 @@
     "start": "ts-node ./src/index.ts",
     "dev": "nodemon ./src/index.ts",
     "build": "tsc",
-    "mail": "nodemon ./mail.ts"
+    "mail": "nodemon ./mail.ts",
+    "oauth": "ts-node ./src/oauth-server.ts",
+    "oauth:dev": "nodemon ./src/oauth-server.ts"
   },
   "keywords": [],
   "author": "",
@@ -19,16 +21,18 @@
     "@types/winston": "2.4.4",
     "nodemon": "^3.1.4",
     "ts-node": "^10.9.2",
-    "typescript": "^5.5.4",
-    "@types/winston": "2.4.4"
-
+    "typescript": "^5.5.4"
   },
   "dependencies": {
     "@aws-sdk/client-sqs": "^3.624.0",
+    "@types/express": "^5.0.3",
     "@types/imap": "^0.8.40",
     "@types/mailparser": "^3.4.4",
     "aws-sdk": "^2.1671.0",
     "dotenv": "^16.4.5",
+    "express": "^5.1.0",
+    "google-auth-library": "^10.3.0",
+    "googleapis": "^160.0.0",
     "imap": "^0.8.19",
     "imapflow": "^1.0.164",
     "ioredis": "^5.7.0",
