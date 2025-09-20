@@ -3,6 +3,7 @@ import Mail from "nodemailer/lib/mailer/index";
 import { getEmailCredentials } from "./database";
 import net from "net";
 import Logger from "../logger";
+import { GmailApiService } from "./gmailApi";
 
 // Test network connectivity to Gmail SMTP
 async function testGmailConnectivity(): Promise<{
@@ -102,6 +103,63 @@ export async function sendEmail(
 ): Promise<boolean> {
   const maxRetries = 2;
   let lastError: any;
+
+  // Get email credentials to check service type
+  const credentials = await getEmailCredentials(replyFrom);
+  if (!credentials) {
+    console.error(`[SendEmail] No credentials found for ${replyFrom}`);
+    return false;
+  }
+
+  // Use Gmail API if service is Gmail and OAuth credentials are available
+  if (
+    credentials.service === "gmail" &&
+    credentials.accessToken &&
+    credentials.refreshToken &&
+    credentials.clientId &&
+    credentials.clientSecret
+  ) {
+    Logger.info(`[SendEmail] Using Gmail API for ${replyFrom}`);
+
+    try {
+      const gmailService = new GmailApiService({
+        clientId: credentials.clientId,
+        clientSecret: credentials.clientSecret,
+        refreshToken: credentials.refreshToken,
+        accessToken: credentials.accessToken,
+        emailId: credentials.emailId,
+      });
+
+      const success = await gmailService.sendReply(
+        to,
+        subject,
+        body,
+        inReplyTo,
+        referenceId
+      );
+
+      if (success) {
+        Logger.info(
+          `[SendEmail] Successfully sent email via Gmail API to ${to} from ${replyFrom}`
+        );
+        return true;
+      } else {
+        Logger.error(
+          `[SendEmail] Failed to send email via Gmail API to ${to} from ${replyFrom}, falling back to SMTP`
+        );
+        // Fall back to SMTP if Gmail API fails
+      }
+    } catch (error) {
+      Logger.error(
+        `[SendEmail] Gmail API error for ${replyFrom}, falling back to SMTP:`,
+        { error }
+      );
+      // Fall back to SMTP if Gmail API fails
+    }
+  }
+
+  // Fall back to SMTP (existing logic)
+  Logger.info(`[SendEmail] Using SMTP for ${replyFrom}`);
 
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {

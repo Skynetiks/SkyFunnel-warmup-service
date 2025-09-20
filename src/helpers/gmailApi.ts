@@ -21,9 +21,11 @@ export class GmailApiService {
   private oauth2Client: OAuth2Client;
   private gmail: any;
   private emailId?: string;
+  private fromEmail: string;
 
   constructor(credentials: GmailCredentials) {
     this.emailId = credentials.emailId;
+    this.fromEmail = credentials.emailId || "me";
 
     this.oauth2Client = new google.auth.OAuth2(
       credentials.clientId,
@@ -208,6 +210,83 @@ export class GmailApiService {
         ["Check Gmail API setup", "Verify credentials"]
       );
       return { found: false, processed: 0 };
+    }
+  }
+
+  /**
+   * Send email reply using Gmail API
+   */
+  async sendReply(
+    to: string,
+    subject: string,
+    body: string,
+    inReplyTo?: string,
+    references?: string
+  ): Promise<boolean> {
+    try {
+      Logger.info(
+        `[GmailAPI] Sending email reply to ${to} with subject: ${subject}`
+      );
+
+      // Refresh access token if needed
+      await this.refreshAccessToken();
+
+      // Create email message in RFC 2822 format
+      const emailLines = [
+        `To: ${to}`,
+        `From: ${this.fromEmail}`,
+        `Subject: Re: ${subject}`,
+        ...(inReplyTo ? [`In-Reply-To: ${inReplyTo}`] : []),
+        ...(references ? [`References: ${references}`] : []),
+        `Content-Type: text/plain; charset=utf-8`,
+        ``,
+        body,
+      ];
+
+      const email = emailLines.join("\r\n");
+
+      // Encode email in base64url format
+      const encodedEmail = Buffer.from(email)
+        .toString("base64")
+        .replace(/\+/g, "-")
+        .replace(/\//g, "_")
+        .replace(/=+$/, "");
+
+      // Send email using Gmail API
+      const response = await this.gmail.users.messages.send({
+        userId: "me",
+        requestBody: {
+          raw: encodedEmail,
+        },
+      });
+
+      if (response.data.id) {
+        Logger.info(
+          `[GmailAPI] Successfully sent email reply. Message ID: ${response.data.id}`
+        );
+        return true;
+      } else {
+        Logger.error(
+          "[GmailAPI] Failed to send email - no message ID returned"
+        );
+        return false;
+      }
+    } catch (error) {
+      Logger.criticalError(
+        "[GmailAPI] Error sending email reply",
+        {
+          action: "Send Email Reply",
+          to,
+          subject,
+          error,
+        },
+        [
+          "Check Gmail API credentials",
+          "Verify API permissions",
+          "Check quota limits",
+        ]
+      );
+      return false;
     }
   }
 

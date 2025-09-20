@@ -69,6 +69,8 @@ type EmailCredentials = {
   password: string;
   accessToken?: string;
   refreshToken?: string;
+  clientId?: string;
+  clientSecret?: string;
 };
 export async function getEmailCredentials(serviceEmailId: string) {
   const queryText = `SELECT * FROM "WarmupEmailServiceEmailCredential" WHERE "emailId" = $1`;
@@ -139,6 +141,8 @@ export async function getEmailCredentials(serviceEmailId: string) {
     hasPassword: !!topMatch.password,
     hasAccessToken: !!topMatch.accessToken,
     hasRefreshToken: !!topMatch.refreshToken,
+    hasClientId: !!topMatch.clientId,
+    hasClientSecret: !!topMatch.clientSecret,
   });
 
   return topMatch;
