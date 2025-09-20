@@ -1,6 +1,7 @@
 import { getEmailCredentials, logEmailResponse } from "./database";
 import Logger from "../logger";
 import { ImapFlow } from "imapflow";
+import { GmailApiService } from "./gmailApi";
 
 interface ProviderConfig {
   host: string;
@@ -8,10 +9,19 @@ interface ProviderConfig {
   secure: boolean;
   spamFolder: string;
   inboxFolder: string;
+  useGmailApi?: boolean; // Use Gmail API instead of IMAP for spam operations
 }
 
 interface Email {
   subject: string;
+}
+
+interface GmailApiCredentials {
+  clientId: string;
+  clientSecret: string;
+  refreshToken: string;
+  accessToken?: string;
+  emailId?: string;
 }
 
 // Logger class for error logging
@@ -79,6 +89,47 @@ async function moveEmailsFromSpamToInbox(
   }
 }
 
+// Gmail API version of spam checking
+async function checkEmailInSpamWithGmailApi(
+  email: Email,
+  gmailCredentials: GmailApiCredentials
+): Promise<boolean> {
+  try {
+    Logger.info(`[GmailAPI] Checking email in spam: ${email.subject}`);
+
+    const gmailService = new GmailApiService(gmailCredentials);
+
+    // Refresh access token if needed
+    await gmailService.refreshAccessToken();
+
+    // Check and fix spam emails
+    const result = await gmailService.checkAndFixSpamEmails(email.subject);
+
+    if (result.found) {
+      Logger.info(
+        `[GmailAPI] Found and processed ${result.processed} spam email(s) with subject: ${email.subject}`
+      );
+      return true;
+    } else {
+      Logger.info(
+        `[GmailAPI] No spam emails found with subject: ${email.subject}`
+      );
+      return false;
+    }
+  } catch (error) {
+    Logger.criticalError(
+      "[GmailAPI] Error checking spam with Gmail API",
+      {
+        action: "Gmail API Spam Check",
+        emailSubject: email.subject,
+        error: error,
+      },
+      ["Check Gmail API credentials", "Verify OAuth setup", "Check API quotas"]
+    );
+    return false;
+  }
+}
+
 const providers: Record<string, ProviderConfig> = {
   gmail: {
     host: "imap.gmail.com",
@@ -86,6 +137,7 @@ const providers: Record<string, ProviderConfig> = {
     secure: true,
     spamFolder: "[Gmail]/Spam",
     inboxFolder: "INBOX",
+    useGmailApi: true, // Use Gmail API for better spam handling
   },
   outlook: {
     host: "outlook.office365.com",
@@ -93,6 +145,7 @@ const providers: Record<string, ProviderConfig> = {
     secure: true,
     spamFolder: "Spam",
     inboxFolder: "Inbox",
+    useGmailApi: false,
   },
   skyfunnel: {
     host: "box.skyfunnel.us",
@@ -100,13 +153,15 @@ const providers: Record<string, ProviderConfig> = {
     secure: true,
     spamFolder: "SPAM",
     inboxFolder: "INBOX",
+    useGmailApi: false,
   },
 };
 
 async function checkEmailInSpam(
   email: Email,
   provider: keyof typeof providers,
-  credentials: { user: string; pass: string }
+  credentials: { user: string; pass: string },
+  gmailCredentials?: GmailApiCredentials
 ): Promise<boolean> {
   let inSpam = false;
   Logger.info(`[CheckSpam] Checking email: ${email.subject}`);
@@ -120,6 +175,12 @@ async function checkEmailInSpam(
       ["Check if the provider is correctly defined"]
     );
     return false;
+  }
+
+  // Use Gmail API if configured and credentials are provided
+  if (providerConfig.useGmailApi && gmailCredentials) {
+    Logger.info(`[CheckSpam] Using Gmail API for provider: ${provider}`);
+    return await checkEmailInSpamWithGmailApi(email, gmailCredentials);
   }
 
   const { host, port, secure, spamFolder, inboxFolder } = providerConfig;
@@ -320,14 +381,45 @@ export async function CheckAndUpdateSpamInDb(
       return { shouldContinue: false, reason: "Email credentials not found" };
     }
 
-    const { emailId: user, password: pass, service } = emailCredentials;
+    const {
+      emailId: user,
+      password: pass,
+      service,
+      accessToken: gmailAccessToken,
+      refreshToken: gmailRefreshToken,
+    } = emailCredentials;
+
+    // Prepare Gmail API credentials if available (for Gmail service)
+    let gmailCredentials: GmailApiCredentials | undefined;
+    if (service === "gmail") {
+      const clientId = process.env.GMAIL_CLIENT_ID;
+      const clientSecret = process.env.GMAIL_CLIENT_SECRET;
+
+      if (clientId && clientSecret && gmailRefreshToken) {
+        gmailCredentials = {
+          clientId,
+          clientSecret,
+          refreshToken: gmailRefreshToken,
+          accessToken: gmailAccessToken,
+          emailId: user, // Pass emailId for token saving
+        };
+        Logger.info(
+          `[CheckAndUpdateSpamInDb] Gmail API credentials found for ${user}, will use API for spam checking`
+        );
+      } else {
+        Logger.warn(
+          `[CheckAndUpdateSpamInDb] Gmail API credentials incomplete for ${user}: clientId=${!!clientId}, clientSecret=${!!clientSecret}, refreshToken=${!!gmailRefreshToken}, falling back to IMAP`
+        );
+      }
+    }
 
     const result = await checkEmailInSpam(
       {
         subject: customId,
       },
       service,
-      { user, pass }
+      { user, pass },
+      gmailCredentials
     );
 
     if (result) {
