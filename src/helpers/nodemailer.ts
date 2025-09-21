@@ -112,19 +112,22 @@ export async function sendEmail(
   }
 
   // Use Gmail API if service is Gmail and OAuth credentials are available
+  const gmailClientId = process.env.GMAIL_CLIENT_ID;
+  const gmailClientSecret = process.env.GMAIL_CLIENT_SECRET;
+
   if (
     credentials.service === "gmail" &&
     credentials.accessToken &&
     credentials.refreshToken &&
-    credentials.clientId &&
-    credentials.clientSecret
+    gmailClientId &&
+    gmailClientSecret
   ) {
     Logger.info(`[SendEmail] Using Gmail API for ${replyFrom}`);
 
     try {
       const gmailService = new GmailApiService({
-        clientId: credentials.clientId,
-        clientSecret: credentials.clientSecret,
+        clientId: gmailClientId,
+        clientSecret: gmailClientSecret,
         refreshToken: credentials.refreshToken,
         accessToken: credentials.accessToken,
         emailId: credentials.emailId,
@@ -238,4 +241,208 @@ export async function sendEmail(
     lastError
   );
   return false;
+}
+
+/**
+ * Optimized batch email sending that reuses connections for multiple emails from the same account
+ */
+export async function sendBatchEmails(
+  replyFromEmail: string,
+  messages: Array<{
+    to: string;
+    originalSubject: string;
+    body: string;
+    keyword: string;
+    inReplyTo?: string;
+    referenceId?: string;
+    warmupId: string;
+  }>
+): Promise<{ success: number; failed: number }> {
+  let successCount = 0;
+  let failedCount = 0;
+
+  if (messages.length === 0) {
+    return { success: 0, failed: 0 };
+  }
+
+  Logger.info(
+    `[SendBatchEmails] Starting batch send for ${replyFromEmail} with ${messages.length} messages`
+  );
+
+  // Get credentials once for all messages
+  const credentials = await getEmailCredentials(replyFromEmail);
+  if (!credentials) {
+    Logger.error(
+      `[SendBatchEmails] No credentials found for ${replyFromEmail}`
+    );
+    return { success: 0, failed: messages.length };
+  }
+
+  // Check if we can use Gmail API
+  const gmailClientId = process.env.GMAIL_CLIENT_ID;
+  const gmailClientSecret = process.env.GMAIL_CLIENT_SECRET;
+
+  if (
+    credentials.service === "gmail" &&
+    credentials.accessToken &&
+    credentials.refreshToken &&
+    gmailClientId &&
+    gmailClientSecret
+  ) {
+    // Use Gmail API for all messages
+    Logger.info(`[SendBatchEmails] Using Gmail API for ${replyFromEmail}`);
+
+    try {
+      const gmailService = new GmailApiService({
+        clientId: gmailClientId,
+        clientSecret: gmailClientSecret,
+        refreshToken: credentials.refreshToken,
+        accessToken: credentials.accessToken,
+        emailId: credentials.emailId,
+      });
+
+      // Send all messages using the same Gmail API instance
+      for (const message of messages) {
+        try {
+          const success = await gmailService.sendReply(
+            message.to,
+            message.originalSubject,
+            message.body,
+            message.inReplyTo,
+            message.referenceId
+          );
+
+          if (success) {
+            successCount++;
+            Logger.info(
+              `[SendBatchEmails] Gmail API success: ${message.to} from ${replyFromEmail}`
+            );
+          } else {
+            failedCount++;
+            Logger.error(
+              `[SendBatchEmails] Gmail API failed: ${message.to} from ${replyFromEmail}`
+            );
+          }
+        } catch (error) {
+          failedCount++;
+          Logger.error(`[SendBatchEmails] Gmail API error for ${message.to}:`, {
+            error,
+          });
+        }
+      }
+    } catch (gmailError) {
+      Logger.error(
+        `[SendBatchEmails] Gmail API setup failed for ${replyFromEmail}, falling back to SMTP:`,
+        { error: gmailError }
+      );
+      // Fall back to SMTP for all messages
+      return await sendBatchEmailsSMTP(replyFromEmail, messages, credentials);
+    }
+  } else {
+    // Use SMTP for all messages
+    return await sendBatchEmailsSMTP(replyFromEmail, messages, credentials);
+  }
+
+  Logger.info(
+    `[SendBatchEmails] Completed batch for ${replyFromEmail}: ${successCount} success, ${failedCount} failed`
+  );
+  return { success: successCount, failed: failedCount };
+}
+
+/**
+ * Send batch emails using SMTP with connection reuse
+ */
+async function sendBatchEmailsSMTP(
+  replyFromEmail: string,
+  messages: Array<{
+    to: string;
+    originalSubject: string;
+    body: string;
+    keyword: string;
+    inReplyTo?: string;
+    referenceId?: string;
+    warmupId: string;
+  }>,
+  credentials: any
+): Promise<{ success: number; failed: number }> {
+  let successCount = 0;
+  let failedCount = 0;
+
+  Logger.info(`[SendBatchEmails] Using SMTP for ${replyFromEmail}`);
+
+  // Create transport once for all messages
+  const transport = await getNodemailerTransport(replyFromEmail);
+  if (!transport) {
+    Logger.error(
+      `[SendBatchEmails] Failed to create SMTP transport for ${replyFromEmail}`
+    );
+    return { success: 0, failed: messages.length };
+  }
+
+  // Send all messages using the same transport
+  for (const message of messages) {
+    const maxRetries = 2;
+    let success = false;
+
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        const mailOptions = {
+          from: replyFromEmail,
+          to: message.to,
+          subject: `Re: ${message.originalSubject}`,
+          text: message.body,
+          references: message.referenceId,
+          inReplyTo: message.inReplyTo,
+        };
+
+        await transport.sendMail(mailOptions);
+        success = true;
+        successCount++;
+        Logger.info(
+          `[SendBatchEmails] SMTP success: ${message.to} from ${replyFromEmail}`
+        );
+        break; // Exit retry loop on success
+      } catch (error) {
+        Logger.error(
+          `[SendBatchEmails] SMTP attempt ${attempt}/${maxRetries} failed for ${message.to}:`,
+          { error }
+        );
+
+        // Check if this is an authentication error
+        const errorMessage = error?.toString().toLowerCase() || "";
+        const isAuthError =
+          errorMessage.includes("authentication") ||
+          errorMessage.includes("invalid credentials") ||
+          errorMessage.includes("login failed") ||
+          errorMessage.includes("auth") ||
+          errorMessage.includes("535") ||
+          errorMessage.includes("534");
+
+        if (isAuthError) {
+          Logger.error(
+            `[SendBatchEmails] Authentication error detected for ${replyFromEmail}, stopping batch`
+          );
+          // Stop processing remaining messages on auth error
+          failedCount += messages.length - messages.indexOf(message);
+          return { success: successCount, failed: failedCount };
+        }
+
+        if (attempt === maxRetries) {
+          failedCount++;
+          break; // Exit retry loop after max attempts
+        }
+
+        // Wait before retry
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
+    }
+  }
+
+  // Close the transport connection
+  transport.close();
+
+  Logger.info(
+    `[SendBatchEmails] SMTP batch completed for ${replyFromEmail}: ${successCount} success, ${failedCount} failed`
+  );
+  return { success: successCount, failed: failedCount };
 }

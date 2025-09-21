@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { logEmailResponse } from "./helpers/database";
-import { sendEmail } from "./helpers/nodemailer";
+import { sendEmail, sendBatchEmails } from "./helpers/nodemailer";
 import {
   receiveMessageFromQueue,
   deleteMessageFromQueue,
@@ -84,7 +84,9 @@ async function addMessageToBatch(message: SQSMessage): Promise<void> {
       shouldReply,
     } = EmailSchema.parse(email);
 
-    Logger.info(`[AddMessageToBatch] Adding message to batch for email: ${to} to be replied by ${replyFrom}`, );
+    Logger.info(
+      `[AddMessageToBatch] Adding message to batch for email: ${to} to be replied by ${replyFrom}`
+    );
 
     // Add message to the current hour batch
     const messageData = {
@@ -183,23 +185,30 @@ async function processBatchedEmails(): Promise<void> {
           continue;
         }
 
-        // Process all messages for this email account
-        let successfulMessages = 0;
-        for (const messageData of messagesArray) {
-          try {
-            // Send email if shouldReply is true
-            if (messageData.shouldReply) {
-              const success = await sendEmail(
-                messageData.to,
-                messageData.originalSubject,
-                messageData.body,
-                messageData.keyword,
-                messageData.inReplyTo || "",
-                messageData.referenceId || "",
-                replyFromEmail
-              );
+        // Separate messages that need replies vs those that don't
+        const messagesToSend = messagesArray.filter((msg) => msg.shouldReply);
+        const messagesToSkip = messagesArray.filter((msg) => !msg.shouldReply);
 
-              if (success) {
+        let successfulMessages = 0;
+
+        // Process messages that don't need replies
+        for (const messageData of messagesToSkip) {
+          successfullyProcessedMessages.push(messageData.receiptHandle);
+          successfulMessages++;
+        }
+
+        // Send all emails for this account in one optimized batch
+        if (messagesToSend.length > 0) {
+          try {
+            const batchResult = await sendBatchEmails(
+              replyFromEmail,
+              messagesToSend
+            );
+
+            // Log successful email responses
+            let successIndex = 0;
+            for (const messageData of messagesToSend) {
+              if (successIndex < batchResult.success) {
                 Logger.info(
                   `[ProcessBatchedEmails] Successfully sent email to ${messageData.to} from ${replyFromEmail}`
                 );
@@ -211,23 +220,68 @@ async function processBatchedEmails(): Promise<void> {
                 // Message already deleted from SQS when added to batch
                 successfullyProcessedMessages.push(messageData.receiptHandle);
                 successfulMessages++;
+                successIndex++;
               } else {
                 Logger.error(
                   `[ProcessBatchedEmails] Failed to send email to ${messageData.to} from ${replyFromEmail}`
                 );
-                // If this fails due to auth error, future messages will be skipped
-                // Message will be retried in next cycle if not an auth error
               }
-            } else {
-              // Message already deleted from SQS when added to batch
-              successfullyProcessedMessages.push(messageData.receiptHandle);
-              successfulMessages++;
             }
-          } catch (messageError) {
-            Logger.error(
-              `[ProcessBatchedEmails] Error processing individual message for ${replyFromEmail}:`,
-              { error: messageError, replyFromEmail }
+
+            Logger.info(
+              `[ProcessBatchedEmails] Batch send completed for ${replyFromEmail}: ${batchResult.success}/${messagesToSend.length} successful`
             );
+          } catch (batchError) {
+            Logger.criticalError(
+              "[ProcessBatchedEmails] Error in batch email sending:",
+              {
+                action: "Batch Email Sending",
+                error: batchError,
+                replyFromEmail,
+                messageCount: messagesToSend.length,
+              },
+              ["Error in optimized batch sending"]
+            );
+
+            // Fallback to individual sending if batch fails
+            Logger.info(
+              `[ProcessBatchedEmails] Falling back to individual sending for ${replyFromEmail}`
+            );
+            for (const messageData of messagesToSend) {
+              try {
+                const success = await sendEmail(
+                  messageData.to,
+                  messageData.originalSubject,
+                  messageData.body,
+                  messageData.keyword,
+                  messageData.inReplyTo || "",
+                  messageData.referenceId || "",
+                  replyFromEmail
+                );
+
+                if (success) {
+                  Logger.info(
+                    `[ProcessBatchedEmails] Successfully sent email to ${messageData.to} from ${replyFromEmail}`
+                  );
+                  await logEmailResponse(
+                    messageData.warmupId,
+                    messageData.to,
+                    "REPLIED"
+                  );
+                  successfullyProcessedMessages.push(messageData.receiptHandle);
+                  successfulMessages++;
+                } else {
+                  Logger.error(
+                    `[ProcessBatchedEmails] Failed to send email to ${messageData.to} from ${replyFromEmail}`
+                  );
+                }
+              } catch (messageError) {
+                Logger.error(
+                  `[ProcessBatchedEmails] Error processing individual message for ${replyFromEmail}:`,
+                  { error: messageError, replyFromEmail }
+                );
+              }
+            }
           }
         }
 
