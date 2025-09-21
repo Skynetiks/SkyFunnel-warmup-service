@@ -214,7 +214,58 @@ export class GmailApiService {
   }
 
   /**
-   * Send email reply using Gmail API
+   * Find thread ID for threading replies correctly
+   */
+  private async findThreadId(messageId: string): Promise<string | null> {
+    try {
+      if (!messageId) return null;
+
+      // Clean the message ID for search (remove < > if present)
+      const cleanMessageId = messageId.replace(/^<|>$/g, "");
+
+      Logger.info(
+        `[GmailAPI] Searching for thread with message ID: ${cleanMessageId}`
+      );
+
+      // Search for the original message
+      const searchResponse = await this.gmail.users.messages.list({
+        userId: "me",
+        q: `rfc822msgid:${cleanMessageId}`,
+        maxResults: 1,
+      });
+
+      if (
+        searchResponse.data.messages &&
+        searchResponse.data.messages.length > 0
+      ) {
+        const messageId = searchResponse.data.messages[0].id;
+
+        // Get the message details to find thread ID
+        const messageResponse = await this.gmail.users.messages.get({
+          userId: "me",
+          id: messageId,
+          format: "metadata",
+        });
+
+        const threadId = messageResponse.data.threadId;
+        Logger.info(
+          `[GmailAPI] Found thread ID: ${threadId} for message: ${cleanMessageId}`
+        );
+        return threadId;
+      }
+
+      Logger.info(
+        `[GmailAPI] No thread found for message ID: ${cleanMessageId}`
+      );
+      return null;
+    } catch (error) {
+      Logger.error("[GmailAPI] Error finding thread ID:", { error, messageId });
+      return null;
+    }
+  }
+
+  /**
+   * Send email reply using Gmail API with proper threading
    */
   async sendReply(
     to: string,
@@ -230,6 +281,19 @@ export class GmailApiService {
 
       // Refresh access token if needed
       await this.refreshAccessToken();
+
+      // Find the thread ID for proper threading
+      let threadId: string | null = null;
+      if (inReplyTo) {
+        threadId = await this.findThreadId(inReplyTo);
+      } else if (references) {
+        // Try to find thread using the last reference
+        const referenceList = references.split(/\s+/);
+        const lastReference = referenceList[referenceList.length - 1];
+        if (lastReference) {
+          threadId = await this.findThreadId(lastReference);
+        }
+      }
 
       // Create email message in RFC 2822 format
       const emailLines = [
@@ -252,17 +316,30 @@ export class GmailApiService {
         .replace(/\//g, "_")
         .replace(/=+$/, "");
 
-      // Send email using Gmail API
-      const response = await this.gmail.users.messages.send({
+      // Prepare send request
+      const sendRequest: any = {
         userId: "me",
         requestBody: {
           raw: encodedEmail,
         },
-      });
+      };
+
+      // Add thread ID if found for proper threading
+      if (threadId) {
+        sendRequest.requestBody.threadId = threadId;
+        Logger.info(`[GmailAPI] Sending reply to thread: ${threadId}`);
+      } else {
+        Logger.info(`[GmailAPI] Sending as new conversation (no thread found)`);
+      }
+
+      // Send email using Gmail API
+      const response = await this.gmail.users.messages.send(sendRequest);
 
       if (response.data.id) {
         Logger.info(
-          `[GmailAPI] Successfully sent email reply. Message ID: ${response.data.id}`
+          `[GmailAPI] Successfully sent email reply. Message ID: ${
+            response.data.id
+          }, Thread ID: ${response.data.threadId || "N/A"}`
         );
         return true;
       } else {
