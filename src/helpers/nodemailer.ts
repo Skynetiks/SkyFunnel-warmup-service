@@ -136,7 +136,7 @@ export async function sendEmail(
       const success = await gmailService.sendReply(
         to,
         subject,
-        body,
+        body, // body (3rd parameter) contains the reply content
         inReplyTo,
         referenceId
       );
@@ -170,7 +170,7 @@ export async function sendEmail(
         from: replyFrom,
         to,
         subject: `Re: ${subject}`,
-        text: body,
+        text: body, // body (3rd parameter) contains the reply content
         references: referenceId,
         inReplyTo: inReplyTo,
       } satisfies Mail.Options;
@@ -307,7 +307,7 @@ export async function sendBatchEmails(
           const success = await gmailService.sendReply(
             message.to,
             message.originalSubject,
-            message.body,
+            message.body, // body contains the reply content
             message.inReplyTo,
             message.referenceId
           );
@@ -390,7 +390,7 @@ async function sendBatchEmailsSMTP(
           from: replyFromEmail,
           to: message.to,
           subject: `Re: ${message.originalSubject}`,
-          text: message.body,
+          text: message.body, // body contains the reply content
           references: message.referenceId,
           inReplyTo: message.inReplyTo,
         };
