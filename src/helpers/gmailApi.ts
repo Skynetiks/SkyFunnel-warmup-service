@@ -22,6 +22,7 @@ export class GmailApiService {
   private gmail: any;
   private emailId?: string;
   private fromEmail: string;
+  private tokenExpiryTime?: number;
 
   constructor(credentials: GmailCredentials) {
     this.emailId = credentials.emailId;
@@ -39,6 +40,10 @@ export class GmailApiService {
     });
 
     this.gmail = google.gmail({ version: "v1", auth: this.oauth2Client });
+
+    // Set token expiry time (Gmail access tokens typically expire in 1 hour)
+    // We'll refresh 5 minutes before expiry to be safe
+    this.tokenExpiryTime = Date.now() + 55 * 60 * 1000; // 55 minutes from now
   }
 
   /**
@@ -265,6 +270,16 @@ export class GmailApiService {
   }
 
   /**
+   * Check if the access token needs refreshing
+   */
+  private isTokenExpired(): boolean {
+    if (!this.tokenExpiryTime) {
+      return true; // If no expiry time set, assume expired
+    }
+    return Date.now() >= this.tokenExpiryTime;
+  }
+
+  /**
    * Send email reply using Gmail API with proper threading
    */
   async sendReply(
@@ -279,8 +294,15 @@ export class GmailApiService {
         `[GmailAPI] Sending email reply to ${to} with subject: ${subject}`
       );
 
-      // Refresh access token if needed
-      await this.refreshAccessToken();
+      // Only refresh access token if it's expired or about to expire
+      if (this.isTokenExpired()) {
+        Logger.info(`[GmailAPI] Token expired, refreshing for ${this.emailId}`);
+        await this.refreshAccessToken();
+      } else {
+        Logger.info(
+          `[GmailAPI] Token still valid, skipping refresh for ${this.emailId}`
+        );
+      }
 
       // Find the thread ID for proper threading
       let threadId: string | null = null;
@@ -374,6 +396,9 @@ export class GmailApiService {
     try {
       const { credentials } = await this.oauth2Client.refreshAccessToken();
       this.oauth2Client.setCredentials(credentials);
+
+      // Update token expiry time (Gmail access tokens typically expire in 1 hour)
+      this.tokenExpiryTime = Date.now() + 55 * 60 * 1000; // 55 minutes from now
 
       // Save updated access token to database if emailId is available
       if (this.emailId && credentials.access_token) {

@@ -302,6 +302,7 @@ export async function sendBatchEmails(
       });
 
       // Send all messages using the same Gmail API instance
+      // This ensures token refresh only happens once per batch, not per message
       for (const message of messages) {
         try {
           const success = await gmailService.sendReply(
